@@ -35,28 +35,20 @@ export function buildApp() {
 
   // Serve the admin-web SPA (built into apps/api/public before deploy).
   // Resolve the directory robustly across dev (source), compiled (dist), and
-  // Vercel function bundle (includeFiles preserves apps/api/public/...).
-  const publicDirCandidates = [
-    path.join(process.cwd(), 'apps', 'api', 'public'),
-    path.join(__dirname, '..', '..', 'public'),
-    path.join(__dirname, '..', '..', 'dist', 'public'),
-    path.join(__dirname, '..', 'public'),
-  ]
-  const publicDir =
-    publicDirCandidates.find((p) => {
-      try {
-        return require('node:fs').existsSync(p)
-      } catch {
-        return false
-      }
-    }) ?? null
+  // the Vercel function bundle. Fall back to a filesystem search so the SPA
+  // is found regardless of where the runtime lands the included files.
+  const fs = require('node:fs')
+  const publicDir = resolvePublicDir(fs, __dirname)
 
   if (publicDir) {
+    app.log.info({ publicDir }, 'Serving admin-web SPA from')
     app.register(fastifyStatic, {
       root: publicDir,
       wildcard: false,
       prefix: '/',
     })
+  } else {
+    app.log.warn('Unable to locate admin-web SPA static directory')
   }
 
   // SPA fallback: any non-API GET returns index.html for client-side routing.
@@ -73,6 +65,46 @@ export function buildApp() {
   })
 
   return app
+}
+
+function resolvePublicDir(fs: typeof import('node:fs'), dirname: string): string | null {
+  const candidates: string[] = [
+    path.join(process.cwd(), 'apps', 'api', 'public'),
+    path.join(dirname, '..', '..', 'public'),
+    path.join(dirname, '..', '..', 'dist', 'public'),
+    path.join(dirname, '..', 'public'),
+    // Vercel lambda: files may be hoisted relative to the function root.
+    path.join(process.cwd(), 'public'),
+    path.join(process.cwd(), 'apps'),
+  ]
+
+  for (const candidate of candidates) {
+    try {
+      if (fs.existsSync(path.join(candidate, 'index.html'))) return candidate
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // Last resort: walk upward from the module and from cwd looking for a
+  // directory that contains index.html (i.e. the admin-web build output).
+  const dirs = [process.cwd(), dirname]
+  for (const start of dirs) {
+    let current = start
+    for (let i = 0; i < 8; i++) {
+      try {
+        const root = path.join(current, 'apps', 'api', 'public')
+        if (fs.existsSync(path.join(root, 'index.html'))) return root
+      } catch {
+        /* ignore */
+      }
+      const parent = path.dirname(current)
+      if (parent === current) break
+      current = parent
+    }
+  }
+
+  return null
 }
 
 // Only listen when run directly (not when imported by Vercel)

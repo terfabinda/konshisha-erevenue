@@ -9,6 +9,7 @@ build/
 *.log
 .DS_Store
 coverage/
+tmp/
 
 # Build artifact: copies of admin-web/dist served by the API
 apps/api/public/
