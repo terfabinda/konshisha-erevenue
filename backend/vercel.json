@@ -1,0 +1,23 @@
+{
+  "version": 2,
+  "buildCommand": "npm run build --workspaces && node scripts/copy-static.mjs",
+  "builds": [
+    {
+      "src": "apps/api/api/index.ts",
+      "use": "@vercel/node",
+      "config": {
+        "includeFiles": [
+          "apps/api/public/**",
+          "apps/api/dist/**"
+        ],
+        "maxDuration": 10
+      }
+    }
+  ],
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "/apps/api/api/index.ts"
+    }
+  ]
+}

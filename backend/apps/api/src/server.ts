@@ -1,5 +1,7 @@
 import Fastify from 'fastify'
 import cors from '@fastify/cors'
+import fastifyStatic from '@fastify/static'
+import path from 'node:path'
 import dotenv from 'dotenv'
 import { registerAuthRoutes } from './routes/auth'
 import { registerAgencyRoutes } from './routes/agencies'
@@ -30,6 +32,45 @@ export function buildApp() {
   app.register(registerCategoryRoutes, { prefix: '/api/categories' })
   app.register(registerSecurityRoutes, { prefix: '/api/security' })
   app.register(registerAgentRoutes, { prefix: '/api/agents' })
+
+  // Serve the admin-web SPA (built into apps/api/public before deploy).
+  // Resolve the directory robustly across dev (source), compiled (dist), and
+  // Vercel function bundle (includeFiles preserves apps/api/public/...).
+  const publicDirCandidates = [
+    path.join(process.cwd(), 'apps', 'api', 'public'),
+    path.join(__dirname, '..', '..', 'public'),
+    path.join(__dirname, '..', '..', 'dist', 'public'),
+    path.join(__dirname, '..', 'public'),
+  ]
+  const publicDir =
+    publicDirCandidates.find((p) => {
+      try {
+        return require('node:fs').existsSync(p)
+      } catch {
+        return false
+      }
+    }) ?? null
+
+  if (publicDir) {
+    app.register(fastifyStatic, {
+      root: publicDir,
+      wildcard: false,
+      prefix: '/',
+    })
+  }
+
+  // SPA fallback: any non-API GET returns index.html for client-side routing.
+  app.setNotFoundHandler((req, reply) => {
+    if (
+      publicDir &&
+      req.method === 'GET' &&
+      !req.url.startsWith('/api') &&
+      req.url !== '/health'
+    ) {
+      return reply.sendFile('index.html')
+    }
+    return reply.code(404).send({ error: 'Not found', path: req.url })
+  })
 
   return app
 }

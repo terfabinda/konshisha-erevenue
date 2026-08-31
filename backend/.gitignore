@@ -10,6 +10,9 @@ build/
 .DS_Store
 coverage/
 
+# Build artifact: copies of admin-web/dist served by the API
+apps/api/public/
+
 # Vercel
 .vercel/
 
