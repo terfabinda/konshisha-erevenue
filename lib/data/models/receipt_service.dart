@@ -224,6 +224,12 @@ class ReceiptService {
     return pending.where((r) => !allFirestoreIds.contains(r.id)).length;
   }
 
+  /// Returns ONLY the receipts still sitting in the local pending queue
+  /// (used by the sync service to know exactly what needs to be uplinked).
+  static Future<List<Receipt>> getPendingReceipts() async {
+    return _getPendingReceipts();
+  }
+
   static Future<List<Map<String, dynamic>>?> _safeReadPending() async {
     try {
       return await EncryptedPrefs.instance.readJsonList(_pendingKey);

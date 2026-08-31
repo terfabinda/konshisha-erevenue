@@ -50,6 +50,9 @@ dependencies:
   # Connectivity
   connectivity_plus: ^6.0.3
 
+  # Backend / Sync (Node.js API + Supabase)
+  http: ^1.2.0
+
   # Printing
   blue_thermal_printer_plus: ^0.0.8
   permission_handler: ^11.3.1

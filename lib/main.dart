@@ -6,6 +6,7 @@ import 'core/services/auth_service.dart';
 import 'core/services/security_config_service.dart';
 import 'data/models/receipt_service.dart';
 import 'core/constants/app_strings.dart';
+import 'sync/auto_sync_service.dart';
 import 'presentation/screens/auth/login_screen.dart';
 import 'presentation/screens/home/merchant_dashboard.dart';
 import 'presentation/screens/home/pay_bills_screen.dart';
@@ -35,6 +36,7 @@ void main() async {
   await AuthService.upgradeLegacyDemoSession();
   await SecurityConfigService.initialize();
   ReceiptService.initAutoSync();
+  AutoSyncService.instance.start();
   runApp(const ERevenueApp());
 }
 
