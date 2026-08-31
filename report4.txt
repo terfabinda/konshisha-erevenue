@@ -1,0 +1,62 @@
+Bug: Device Mismatch on Login
+================================
+
+**Bug Location**: `lib/core/security/device_fingerprint_service.dart:48-57` — `getOrCreateFingerprint()`
+
+**Root Cause**:
+`getOrCreateFingerprint()` compared the cached fingerprint against a freshly generated one.
+When the persistent UUID (stored in FlutterSecureStorage) changed on the device — which is
+common on Windows due to credential volatility — the hardware fingerprint wouldn't match the
+cache. The method then **overwrote** the cache with the new fingerprint, which didn't match
+the `boundDeviceFingerprint` in Firestore, causing a permanent "device mismatch" loop on
+every subsequent login attempt.
+
+**Flow**:
+1. First login: generates fingerprint F1 = sha256("unknown_device|<UUID_1>"). Cached locally,
+   saved to Firestore as `boundDeviceFingerprint`.
+2. Persistent UUID changes to UUID_2 (FlutterSecureStorage data lost/regenerated).
+3. Second login: `getOrCreateFingerprint()` — cached F1, current = F2 (from UUID_2).
+   F1 != F2, so it overwrites cache with F2 and returns F2.
+4. `auth_service.dart` compares F2 against Firestore's F1 → MISMATCH → "Device mismatch" error.
+5. Every subsequent attempt: cache returns F2, Firestore has F1 → permanent lockout.
+
+**Fix Applied** (`device_fingerprint_service.dart:48-56`):
+`getOrCreateFingerprint()` now always returns the cached fingerprint if one exists, without
+re-validating against current hardware. This ensures the value returned is always the one
+that was bound to Firestore.
+
+Before:
+```dart
+static Future<String> getOrCreateFingerprint() async {
+    final cached = await _secureStorage.read(key: _fingerprintKey);
+    if (cached != null && cached.isNotEmpty) {
+      final current = await generateFingerprint();
+      if (cached == current) return cached;
+    }
+    final fingerprint = await generateFingerprint();
+    await _secureStorage.write(key: _fingerprintKey, value: fingerprint);
+    return fingerprint;
+}
+```
+
+After:
+```dart
+static Future<String> getOrCreateFingerprint() async {
+    final cached = await _secureStorage.read(key: _fingerprintKey);
+    if (cached != null && cached.isNotEmpty) {
+      return cached;
+    }
+    final fingerprint = await generateFingerprint();
+    await _secureStorage.write(key: _fingerprintKey, value: fingerprint);
+    return fingerprint;
+}
+```
+
+**Error Message Updated** (`auth_service.dart:53`):
+Old: "Device mismatch. This account is bound to a different device."
+New: "Device mismatch. This account is bound to a different device. Contact an administrator to reset the device binding."
+
+**Recovery for Existing Users**:
+Since the cache was already overwritten by the bug, affected users need an admin to reset
+their `boundDeviceFingerprint` in Firestore via the agent management screen's "Reset Device
+Binding" function. After reset, the next login will bind the correct fingerprint.

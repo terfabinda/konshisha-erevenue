@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "559481604170",
+    "project_id": "erevenue-c9906",
+    "storage_bucket": "erevenue-c9906.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:559481604170:android:c777d6f8df7219c859beb3",
+        "android_client_info": {
+          "package_name": "com.konshisha.app.konshisha_igr"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAwyYvAI_4azmENESmc0l-VIfTaPXa2z5E"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

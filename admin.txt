@@ -1,0 +1,55 @@
+================================================================================
+EREVENUE APP - FREQUENTLY ASKED QUESTIONS
+================================================================================
+
+Q: Why "Temporary Password" when creating an agent?
+────────────────────────────────────────────────────
+The admin creates the agent account and sets the initial password. The agent
+uses it to log in the first time. After first login, the agent should change
+it via Settings → Change Password. It's called "temporary" because the admin
+shouldn't know the agent's permanent password.
+
+Q: What is the 21 day expiry?
+────────────────────────────────────────────────────
+This is the loginExpiryAt field. It sets the maximum number of days an
+agent's login session remains valid. After this period expires (or if the
+agent hasn't synced online within maxOfflineDays), the agent is forced to
+re-enter their email and password.
+
+This is a security measure that:
+- Prevents stale sessions from being exploited
+- Forces agents to periodically re-verify their identity
+- Allows admins to revoke access by setting a past expiry date
+- Ensures agents come online regularly for sync
+
+Both the "Temporary Password" and "Login Expiry Days" are configurable
+per-agent when creating them in the Agent Management screen.
+
+Q: What's the difference between loginExpiryAt and maxOfflineDays?
+──────────────────────────────────────────────────────────────────
+- loginExpiryAt: The date after which the agent MUST re-login with credentials.
+  Default: 21 days from creation. Controls session validity.
+
+- maxOfflineDays: The maximum number of days the agent can work offline before
+  being forced to sync. Default: 7 days. Controls offline tolerance.
+
+  Example: loginExpiryAt = 21 days, maxOfflineDays = 7 days
+  → Agent can stay offline for up to 7 days.
+  → After 7 days offline, they must go online and sync.
+  → After 21 days total (regardless of online/offline), they must re-login.
+
+================================================================================
+
+admink@erevenue.ng -> V4gk1@2024! -> apReWWMkq9UGnKScnhoNdjJGfUf1 
+adminl@erevenue.ng -> V4gk1@2024! -> plsd3FlqlCNI3L6SOPSDBPyDXiK2 -> 35ee727eb3f6d36843a4797641f1c93482ed33009d834e27ac6a10abf42812cf
+
+
+agencyId:null(null)
+boundDeviceFingerprint: "35ee727eb3f6d36843a4797641f1c93482ed33009d834e27ac6a10abf42812cf"(string)
+createdAt: May 4, 2026 at 3:07:11 PM UTC+1(timestamp)
+displayName: "Terfa Binda"(string)
+isActive: true(boolean)
+lastLoginAt: May 4, 2026 at 5:02:12 PM UTC+1(timestamp)
+maxOfflineDays: 0(int64)
+role: "admin"(string)
+username: "adminl@erevenue.ng"

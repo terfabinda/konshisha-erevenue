@@ -1,0 +1,798 @@
+================================================================================
+EREVENUE APP - REPORT 3: OFFLINE RECEIPTS, APK SHARING & DEVICE FINGERPRINTING
+Generated: 2026-05-04
+Based on: report2.txt (Implementation Plan v2.0.0+1)
+================================================================================
+
+QUESTION 1: Can an agent generate receipts offline?
+================================================================================
+
+YES — absolutely. The entire app is designed as OFFLINE-FIRST.
+
+How it works:
+  - Receipt creation, printing, and local storage all happen without any
+    network connection. This is the primary mode of operation.
+  - All receipts are stored locally in EncryptedSharedPreferences (AES-256-GCM
+    encrypted, with HMAC integrity verification).
+  - The sync queue stores receipts locally with syncStatus=0 (pending) until
+    connectivity is restored.
+  - When online, the SyncService automatically pushes pending receipts to the
+    server via POST /api/v1/sync/push (Section 6.7).
+
+What IS allowed offline:
+  - Login (if last online sync was within maxOfflineDays)
+  - Receipt creation and printing
+  - Viewing own receipt/print history
+  - Queueing data for later sync
+
+What is BLOCKED offline:
+  - Agency onboarding
+  - Agent creation/management
+  - Password changes
+  - Sync management
+
+Reference: Section 6.8 "Offline Security Checks" (lines 886-908)
+
+
+QUESTION 2: How long can data be kept offline before online sync is forced?
+================================================================================
+
+Configurable via server-pushed security config. Default is 7 days.
+
+How it works:
+  - The server pushes a `max_offline_days` value via the security config
+    in the /api/v1/sync/pull response (Section 6.7, line 880).
+  - This value is stored locally in EncryptedSharedPreferences under the key
+    'security_config'.
+  - When the agent attempts to login while offline, the AuthService checks:
+    "Has it been more than maxOfflineDays since the last successful online
+    sync?" If yes → login is BLOCKED until the device goes online and syncs.
+
+  Default: 7 days (configurable by admin per-user via maxOfflineDays field
+  in UserAccount, Section 2.2, line 134)
+
+  The server can also send `force_sync: true` in the security config, which
+  requires an immediate sync before allowing any further operations (line 905).
+
+  Additionally:
+  - Scheduled auto-sync triggers every 4 hours if the device is online (line 695)
+  - Auto-sync triggers on connectivity restoration (line 694)
+  - Auto-sync triggers on app launch if last sync > 24 hours ago (line 696)
+
+Reference: Section 6.8 (lines 886-908), Section 2.2 (line 134),
+           Section 6.7 (lines 877-883)
+
+
+QUESTION 3: How can APK sharing be discouraged with strict safeguards?
+================================================================================
+
+The plan uses a LAYERED approach with 4 primary safeguards:
+
+LAYER A — Device Binding (PRIMARY defense)
+  - On FIRST login, the agent's account is bound to that specific device's
+    fingerprint (Section 7.1, line 984).
+  - On EVERY subsequent launch, the app verifies the current device fingerprint
+    matches the stored binding (Section 7.1, line 980).
+  - If MISMATCH → the app shows a full-screen "Device mismatch" block screen
+    with NO bypass option (Section 7.4, lines 1095-1112).
+  - Only an admin can reset the binding from the admin dashboard to allow a
+    legitimate device change (Section 7.6, line 1138).
+  - This means: if someone copies the APK to another phone, it will not work
+    because the new device's fingerprint won't match the stored binding.
+
+LAYER B — App Signature Verification
+  - Verifies the APK was signed with the expected production signing key
+    (Section 7.2, line 1009).
+  - If someone decompiles the APK, modifies it, and re-signs it with their
+    own key → the signature won't match → app blocks.
+  - This check is done in NATIVE CODE (Kotlin) to make it harder to bypass
+    from Dart (line 1011).
+
+LAYER C — Integrity Checks (anti-tamper)
+  - Detects known tampering tools: Xposed, Frida (Section 7.2, line 1014).
+  - Verifies the app is running in RELEASE mode, not debug (line 1015).
+  - Detects emulators (line 1016, Section 7.2 method `isEmulator()`).
+  - Root/jailbreak detection via the `root_detection` package (Section 7.2,
+    lines 1033-1037).
+
+LAYER D — Downgrade Prevention
+  - Prevents installing an older APK to bypass security fixes (Section 7.3).
+  - A `min_version_code` is stored in FlutterSecureStorage and is
+    MONOTONICALLY INCREASING — it never decreases.
+  - If current versionCode < stored min_version_code → DOWNGRADE DETECTED
+    → app clears sensitive data and blocks (line 1071).
+  - Enhanced with NATIVE Android check in MainActivity.onCreate() BEFORE
+    Flutter even loads (lines 1086-1091), making it much harder to bypass.
+
+  Threat Model Summary (Section 11):
+    - APK copied to another device → Mitigated by device binding
+      (Residual Risk: Medium — bypassable only by copying secure storage)
+    - APK decompiled and re-signed → Mitigated by native signature verification
+      (Residual Risk: Low)
+    - Older APK installed to bypass security → Mitigated by monotonic
+      min_version_code in secure storage
+      (Residual Risk: Low — requires clearing secure storage which deletes data)
+    - SharedPreferences tampered on rooted device → Mitigated by HMAC
+      integrity checks on all encrypted values (Section 1.4)
+
+
+QUESTION 4: How can the app be fingerprinted on each device and prevented
+from being shared?
+================================================================================
+
+The fingerprinting process is detailed in Section 7 (lines 950-1163).
+
+FINGERPRINT GENERATION PROCESS:
+
+  Step 1 — Collect hardware identifiers (Section 7.1, line 966):
+    - Android ID
+    - Board, Brand, Device, Hardware, Model, Product
+    - Build fingerprint
+    - Serial number (if available)
+
+  Step 2 — Add persistent UUID:
+    - A unique UUID is generated on first app launch
+    - Stored in FlutterSecureStorage (backed by Android KeyStore)
+    - This UUID SURVIVES app uninstall/reinstall because KeyStore persists
+      (line 972, 991)
+
+  Step 3 — Combine and hash:
+    - All identifiers + persistent UUID are concatenated into a single string
+    - SHA-256 hash is computed → this is the final device fingerprint
+    - Format: a 64-character hex string (e.g., "a1b2c3d4...")
+
+  Step 4 — Bind to user (on first login):
+    - The fingerprint is stored in FlutterSecureStorage under key
+      'device_bound_user' (Section 10, line 1326)
+    - The binding is also stored in the UserAccount model's
+      deviceFingerprint field (Section 2.2, line 129)
+    - When online, the binding is registered on the server via
+      POST /api/v1/device/register (Section 6.6, line 805)
+
+  Step 5 — Verify on every launch:
+    - The app regenerates the fingerprint from current hardware
+    - Compares it with the stored binding
+    - If they match → proceed
+    - If they don't match → SecurityBlockedScreen is shown with no bypass
+      (Section 7.4)
+
+PREVENTION OF APK SHARING — HOW IT WORKS IN PRACTICE:
+
+  Scenario 1: Agent copies APK to another phone
+    → New phone generates a DIFFERENT device fingerprint
+    → Fingerprint doesn't match the stored binding
+    → App shows "Device mismatch" block screen
+    → Agent CANNOT use the app on the new phone
+    → Admin must reset the binding from dashboard for it to work
+
+  Scenario 2: Agent factory resets their phone
+    → Android KeyStore is wiped → persistent UUID is lost
+    → New fingerprint is generated (different from old one)
+    → Fingerprint doesn't match → app blocks
+    → Admin must reset binding and re-register the device
+
+  Scenario 3: Someone decompiles and re-signs the APK
+    → App signature verification in native code detects mismatch
+    → App blocks before it can even run
+
+  Scenario 4: Someone tries to install an older version
+    → min_version_code check in native code (MainActivity.onCreate)
+    → App blocks before Flutter even loads
+
+  Scenario 5: Rooted device with tampered SharedPreferences
+    → HMAC integrity check fails on encrypted values
+    → App detects tampering → triggers security alert → locks app
+
+ADMIN CONTROLS (Section 7.6):
+  - View all registered devices per agent (model, fingerprint, last seen)
+  - Reset device binding (unbind → agent can login on a NEW device)
+  - Deactivate a specific device (block it permanently)
+  - View security incident log
+
+================================================================================
+SUMMARY TABLE
+================================================================================
+
+| Capability                    | Answer                                  |
+|-------------------------------|-----------------------------------------|
+| Offline receipt generation    | YES — fully supported, primary mode     |
+| Offline data retention period | 7 days default, configurable by server  |
+| Force sync trigger            | maxOfflineDays exceeded OR force_sync   |
+| APK sharing prevention        | 4-layer: device binding, signature      |
+|                               | verification, integrity checks,         |
+|                               | downgrade prevention                    |
+| Device fingerprinting method  | Hardware IDs + persistent UUID (KeyStore)|
+|                               | → SHA-256 hash → bound to user account  |
+| Can fingerprint be bypassed?  | Only by copying secure storage (Medium  |
+|                               | residual risk) or rooted device tamper  |
+| Admin override                | Yes — admin can reset device binding    |
+| Native-level protection       | Yes — version check and signature       |
+|                               | verification in Kotlin before Flutter   |
+================================================================================
+
+FILES TO CREATE FOR THESE FEATURES (from report2.txt):
+
+  lib/core/security/device_fingerprint_service.dart
+  lib/core/security/app_integrity_service.dart
+  lib/core/security/version_service.dart
+  lib/core/services/login_attempt_service.dart
+  lib/presentation/screens/security_blocked_screen.dart
+  android/app/src/main/kotlin/.../VersionProtection.kt
+  android/app/src/main/kotlin/.../BlockedActivity.kt
+  lib/core/services/sync_service.dart
+  lib/core/services/connectivity_service.dart
+  lib/core/models/sync_queue_item.dart
+  lib/core/models/sync_config.dart
+
+PACKAGES REQUIRED:
+  flutter_secure_storage: ^9.2.2     — KeyStore-backed secure storage
+  device_info_plus: ^10.0.0          — Hardware identifiers
+  package_info_plus: ^8.0.0          — App version info
+  root_detection: ^2.0.2             — Root/jailbreak detection
+  connectivity_plus: ^6.0.3          — Network status monitoring
+  encrypt: ^6.0.0                    — AES-256-GCM encryption
+  crypto: ^3.0.6                     — SHA-256 hashing
+================================================================================
+
+================================================================================
+APPENDIX A: FIRESTORE + SHARED PREFERENCES ARCHITECTURE (NO REST APIS)
+================================================================================
+
+YES — everything described in this report and report2.txt can work with
+Firestore + SharedPreferences. In fact, Firestore is BETTER suited for this
+offline-first receipt collection use case than a custom REST API. Below is
+the complete analysis of what changes, what stays the same, and how each
+feature maps to the Firestore architecture.
+
+
+WHAT STAYS THE SAME (Unaffected by Backend Choice):
+
+  All client-side security features are completely independent of the backend:
+    - Device fingerprinting (Section 7.1) — generates hash from hardware
+    - Device binding (Section 7.2 Layer A) — compares fingerprint locally
+    - App signature verification (Section 7.2 Layer B) — native Kotlin check
+    - Integrity/tamper checks (Section 7.2 Layer C) — root, emulator, Frida
+    - Downgrade prevention (Section 7.3) — min_version_code in secure storage
+    - Security blocked screen (Section 7.4) — UI blocking layer
+    - Login attempt tracking (Section 7.5) — encrypted local counter
+    - EncryptedSharedPreferences (Section 1) — AES-256-GCM local storage
+    - Role-based route guards (Section 2.6) — client-side navigation control
+    - Receipt/print history models (Sections 4-5) — data structures unchanged
+
+  These all run 100% on-device. They do not need any server communication.
+
+
+WHAT CHANGES: THE SYNC LAYER (Section 6 becomes much simpler)
+
+  With Firestore, the entire custom sync infrastructure is REPLACED by
+  Firestore's built-in offline persistence. Here is the mapping:
+
+  REST ARCHITECTURE (original plan)          →  FIRESTORE ARCHITECTURE
+  ─────────────────────────────────────────────  ─────────────────────────
+  Custom SyncService with queue                 → Firestore handles sync natively
+  Manual push/pull protocol                     → Firestore streams handle both
+  SyncQueueItem model                           → Not needed — Firestore queue
+  DioClient (HTTP)                              → cloud_firestore package
+  ConnectivityService + manual triggers         → Firestore auto offline/online
+  /api/v1/sync/push endpoint                    → firestore.collection().add()
+  /api/v1/sync/pull endpoint                    → firestore.collection().snapshots()
+  Conflict resolution logic                     → Firestore last-write-wins or
+                                                   custom via serverTimestamp
+  Retry with exponential backoff                → Firestore handles retries
+  Sync token for incremental sync               → Not needed — Firestore tracks
+  CSV export from local data                    → Same — reads from local cache
+
+  What you SAVE by using Firestore:
+    - No SyncService class needed
+    - No SyncQueueItem model needed
+    - No DioClient implementation needed
+    - No API endpoints to design/maintain on a server
+    - No custom conflict resolution logic
+    - No connectivity_plus package needed (Firestore detects it)
+    - No workmanager for background sync (Firestore does it)
+    - No custom sync UI (progress, retry, resolve conflict)
+
+  Firestore offline persistence guarantees:
+    - All reads serve from local cache when offline
+    - All writes queue locally and auto-sync when online
+    - Cache persists across app restarts
+    - No data loss if app is killed mid-sync
+
+
+HOW EACH FEATURE MAPS TO FIRESTORE:
+
+  1. AUTHENTICATION
+     ─────────────
+     Instead of custom AuthService with local password hashing:
+       - Use Firebase Auth (email/password or phone auth)
+       - User accounts stored in Firestore: collection 'users'
+       - Role (admin/agent) stored as a field in the user document
+       - Device binding: add a 'boundDeviceFingerprint' field to the user doc
+       - Login expiry: add 'loginExpiryAt' timestamp field to the user doc
+       - maxOfflineDays: stored in user doc or in a 'security_config' doc
+
+     Firebase Auth provides:
+       - Real password hashing (bcrypt/scrypt, not DIY)
+       - Session management (ID tokens auto-refresh)
+       - Token revocation (admin can force logout)
+       - Phone number verification (optional)
+
+     What to keep locally in EncryptedSharedPreferences:
+       - Active session cache (user role, display name, agencyId)
+       - Last sync timestamp (for offline expiry check)
+       - Device fingerprint (for local verification before checking Firestore)
+
+  2. OFFLINE-FIRST RECEIPT CREATION
+     ───────────────────────────────
+     Instead of: writing to SharedPreferences + queuing for sync
+     Now: write directly to Firestore collection 'receipts'
+
+     How it works offline:
+       - Firestore caches writes locally automatically
+       - Pending writes appear in snapshots immediately (optimistic UI)
+       - When online, Firestore pushes them to the server
+       - When sync completes, the document gets a serverTimestamp and server ID
+
+     Receipt document structure in Firestore:
+       collection: 'receipts'
+       document fields:
+         - receiptId: string (UUID)
+         - agencyId: string
+         - createdBy: string (user UID)
+         - payerName: string
+         - categoryId: string
+         - amount: number
+         - totalAmount: number
+         - status: string ('active', 'voided', 'refunded')
+         - createdAt: serverTimestamp()
+         - deviceFingerprint: string (which device created it)
+         - syncStatus: derived from Firestore metadata (hasPendingWrites)
+
+     Query receipts offline:
+       FirebaseFirestore.instance
+           .collection('receipts')
+           .where('createdBy', isEqualTo: currentUserId)
+           .snapshots()  // Works offline — serves from cache
+
+  3. FORCED SYNC / OFFLINE EXPIRY
+     ─────────────────────────────
+     This is the trickiest part with Firestore because Firestore syncs
+     transparently — you don't control WHEN it syncs.
+
+     How to enforce maxOfflineDays:
+       - Store 'lastSuccessfulServerSync' timestamp in EncryptedSharedPreferences
+       - On every app launch AND before each receipt creation:
+           1. Check connectivity (connectivity_plus still useful here)
+           2. If ONLINE: force a Firestore round-trip (read a config doc)
+              → Update 'lastSuccessfulServerSync' in SharedPreferences
+           3. If OFFLINE: compare current time vs 'lastSuccessfulServerSync'
+              → If difference > maxOfflineDays → BLOCK receipt creation
+                 → Show "You must go online to sync" screen
+
+     How to implement force_sync from admin:
+       - Admin writes to Firestore: collection 'security_commands'
+         document: '{userId}_force_sync' with field 'issuedAt: now'
+       - Agent's app listens to this document in real-time
+       - When detected → app blocks and requires online sync
+       - After sync completes → app deletes the command doc (or marks resolved)
+
+     Alternative approach (simpler):
+       - Store 'maxOfflineDays' in a Firestore doc 'config/security'
+       - Cache it locally in EncryptedSharedPreferences
+       - On each launch, if online → refresh the cached value
+       - If offline → use cached value to enforce the limit
+       - If cached value is older than maxOfflineDays → block
+
+  4. ROLE-BASED ACCESS CONTROL
+     ──────────────────────────
+     Instead of: client-side route guards only
+     Now: Firestore Security Rules + client-side guards (defense in depth)
+
+     Firestore Security Rules enforce server-side:
+       rules_version = '2';
+       service cloud.firestore {
+         match /databases/{database}/documents {
+           // Agents can only read their own receipts
+           match /receipts/{receiptId} {
+             allow read: if request.auth != null
+               && resource.data.createdBy == request.auth.uid;
+             allow create: if request.auth != null
+               && request.resource.data.createdBy == request.auth.uid;
+             allow update: if request.auth != null
+               && resource.data.createdBy == request.auth.uid;
+           }
+
+           // Only admins can read all receipts
+           match /receipts/{receiptId} {
+             allow read: if request.auth != null
+               && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+           }
+
+           // Only admins can create agencies
+           match /agencies/{agencyId} {
+             allow create: if request.auth != null
+               && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+           }
+
+           // Agents can only read their assigned agency
+           match /agencies/{agencyId} {
+             allow read: if request.auth != null
+               && (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.agencyId == agencyId
+               || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin');
+           }
+         }
+       }
+
+     Client-side route guards (Section 2.6) still needed for UX:
+       - Redirect to login if not authenticated
+       - Show appropriate dashboard per role
+       - Hide admin-only buttons for agents
+
+  5. DEVICE BINDING WITH FIRESTORE
+     ──────────────────────────────
+     How it works with Firestore:
+       - On first login:
+           1. App generates device fingerprint locally
+           2. App writes fingerprint to user document in Firestore:
+              users/{uid}.boundDeviceFingerprint = fingerprint
+           3. App stores fingerprint locally in FlutterSecureStorage
+       - On every subsequent launch:
+           1. App regenerates fingerprint from hardware
+           2. Compare with locally stored fingerprint (fast, works offline)
+           3. If mismatch → BLOCK immediately (no server needed)
+           4. If match → allow (optionally verify against Firestore when online)
+       - Admin can reset binding:
+           - Admin updates the user doc in Firestore: set boundDeviceFingerprint = null
+           - Next time agent logs in on new device → new binding is created
+
+     Firestore document for device tracking:
+       collection: 'devices'
+       document: '{uid}_{fingerprint_hash}'
+       fields:
+         - userId: string
+         - fingerprint: string
+         - deviceModel: string
+         - osVersion: string
+         - firstSeen: timestamp
+         - lastSeen: timestamp
+         - isActive: boolean
+         - deactivatedBy: string (admin UID, if blocked)
+
+  6. SECURITY CONFIG (pushed from server)
+     ─────────────────────────────────────
+     Instead of: REST response with security_config
+     Now: Firestore document with real-time listener
+
+       collection: 'config'
+       document: 'security'
+       fields:
+         - minVersionCode: number (e.g., 3)
+         - maxOfflineDays: number (e.g., 7)
+         - loginExpiryDays: number (e.g., 21)
+         - forceSync: boolean
+         - securityAlerts: array of strings
+         - updatedAt: timestamp
+
+     App listens to this document:
+       FirebaseFirestore.instance
+           .collection('config')
+           .doc('security')
+           .snapshots()
+           .listen((snapshot) {
+             // Update local security config in EncryptedSharedPreferences
+             // If forceSync == true → block and require online sync
+             // If minVersionCode > current → trigger downgrade block
+           });
+
+     This listener works offline (serves cached value) and auto-updates
+     when online. Cache the values in EncryptedSharedPreferences so they
+     are available even if Firestore cache is cleared.
+
+  7. AGENCY & AGENT MANAGEMENT
+     ──────────────────────────
+     Firestore collections:
+       - 'agencies' — one document per agency
+       - 'users' — one document per user (admin + agents)
+       - 'receipts' — one document per receipt
+       - 'printLogs' — one document per print event
+       - 'devices' — one document per registered device
+       - 'config' — security configuration documents
+
+     Agent creation (admin only):
+       - Admin creates user doc in Firestore with role='agent'
+       - Assign agencyId to the user doc
+       - Set maxOfflineDays per user
+       - Set loginExpiryAt timestamp
+       - User downloads app, logs in with Firebase Auth credentials
+       - On first login: device fingerprint is bound to the user doc
+
+  8. PRINT LOGS
+     ──────────
+     Same data model as report2.txt Section 5, just stored in Firestore:
+       collection: 'printLogs'
+       document fields match PrintLog model exactly
+       Queries work offline via Firestore cache
+
+  9. RECEIPT/PRINT HISTORY QUERIES
+     ──────────────────────────────
+     Firestore queries (all work offline via cache):
+       - Get receipts by date range: .where('createdAt', isGreaterThanOrEqualTo: start)
+       - Get receipts by agent: .where('createdBy', isEqualTo: userId)
+       - Get receipts by agency: .where('agencyId', isEqualTo: agencyId)
+       - Get receipts by status: .where('status', isEqualTo: 'active')
+       - Pagination: .limit(50) + startAfter(lastDocument)
+
+     Statistics (computed client-side from cached data):
+       - Total receipts: query count
+       - Total revenue: sum amounts from results
+       - Category breakdown: group by categoryId client-side
+       - Agent performance: query receipts grouped by createdBy
+
+     For large datasets, consider Firestore aggregation queries:
+       - FirebaseFirestore.instance.collection('receipts').count()
+       - Available in cloud_firestore >= 4.14.0
+
+
+FIRESTORE-SPECIFIC CONSIDERATIONS:
+
+  A) Offline Cache Size
+     - Default Firestore cache: 100MB on Android
+     - For a receipt app, this is plenty (each receipt ~1KB, so ~100,000 receipts)
+     - Can be increased: FirebaseFirestore.instance.settings = Settings(
+         persistenceEnabled: true,
+         cacheSizeBytes: Settings.CACHE_SIZE_UNLIMITED,
+       )
+
+  B) HasPendingWrites Detection
+     - Use snapshot.metadata.hasPendingWrites to know if data is synced
+     - This replaces the manual syncStatus field:
+         if (snapshot.metadata.hasPendingWrites) {
+           // Data is queued locally, not yet on server
+           show 'Pending' indicator
+         }
+
+  C) Server Timestamps
+     - Use FieldValue.serverTimestamp() for createdAt, updatedAt
+     - Offline: Firestore uses estimated timestamp (visible in UI immediately)
+     - Online: Firestore replaces with actual server time
+     - Listen to snapshot.metadata.hasPendingWrites to know when it's finalized
+
+  D) Cost Management
+     - Firestore charges per document read/write/delete
+     - Each receipt creation = 1 write
+     - Each history page load = N reads (50 per page)
+     - Use pagination (.limit) to control read costs
+     - Cache aggressively — Firestore offline cache avoids re-reads
+     - Security config doc: read once, cache locally, listen for updates
+
+  E) Data Indexing
+     - Firestore requires composite indexes for multi-field queries
+     - Example: querying by agencyId + date range requires an index
+     - Create indexes in Firebase Console or via firestore.indexes.json
+     - Indexes needed:
+         [agencyId ASC, createdAt DESC]
+         [createdBy ASC, createdAt DESC]
+         [status ASC, createdAt DESC]
+
+  F) Security Rules Testing
+     - Use Firebase Emulator to test security rules locally
+     - Write unit tests for rules using @firebase/rules-unit-testing
+     - Test: agent can't read other agent's receipts, admin can read all
+
+
+UPDATED PACKAGE DEPENDENCIES (Firestore version):
+
+  REMOVE (from original REST plan):
+    - dio: ^5.9.2                    — Replaced by cloud_firestore
+    - connectivity_plus: ^6.0.3      — Not strictly needed (Firestore handles it)
+                                      But still useful for offline expiry checks
+    - workmanager: ^0.5.2            — Not needed (Firestore syncs automatically)
+
+  ADD:
+    - firebase_core: ^2.27.0         — Firebase initialization
+    - cloud_firestore: ^4.15.0       — Firestore database
+    - firebase_auth: ^4.17.0         — Firebase Authentication
+
+  KEEP (unchanged):
+    - flutter_secure_storage: ^9.2.2 — KeyStore-backed secure storage
+    - encrypt: ^6.0.0                — AES-256-GCM for SharedPreferences
+    - crypto: ^3.0.6                 — SHA-256 hashing
+    - device_info_plus: ^10.0.0      — Hardware identifiers
+    - package_info_plus: ^8.0.0      — App version info
+    - root_detection: ^2.0.2         — Root/jailbreak detection
+    - shared_preferences: ^2.5.5     — Local storage (encrypted wrapper)
+    - csv: ^6.0.0                    — CSV export
+    - share_plus: ^10.0.0            — Share exported CSV
+
+
+UPDATED FILES TO CREATE (Firestore version):
+
+  REPLACE these (from REST plan):
+    - lib/core/services/sync_service.dart          → NOT NEEDED
+    - lib/core/services/connectivity_service.dart   → NOT NEEDED (optional)
+    - lib/core/models/sync_queue_item.dart          → NOT NEEDED
+    - lib/core/network/dio_client.dart              → NOT NEEDED
+    - lib/core/constants/api_constants.dart         → Replace with Firestore paths
+
+  INSTEAD create:
+    - lib/core/constants/firestore_paths.dart       — Collection/document paths
+    - lib/core/services/firestore_service.dart      — Firestore CRUD helpers
+    - lib/core/services/auth_service.dart           — Firebase Auth wrapper
+    - lib/core/services/security_config_service.dart — Listen to config doc
+    - lib/firebase_options.dart                     — Firebase config (auto-generated)
+
+  KEEP these (unchanged):
+    - lib/core/security/encrypted_prefs.dart
+    - lib/core/security/integrity_checker.dart
+    - lib/core/security/key_manager.dart
+    - lib/core/security/device_fingerprint_service.dart
+    - lib/core/security/app_integrity_service.dart
+    - lib/core/security/version_service.dart
+    - lib/core/services/login_attempt_service.dart
+    - lib/presentation/screens/security_blocked_screen.dart
+    - android/app/src/main/kotlin/.../VersionProtection.kt
+    - android/app/src/main/kotlin/.../BlockedActivity.kt
+    - lib/core/models/user_account.dart
+    - lib/core/models/agency.dart
+    - lib/core/models/print_log.dart
+    - lib/core/services/receipt_history_service.dart
+    - lib/core/services/print_history_service.dart
+    - lib/core/services/agency_service.dart
+    - All presentation/screens and widgets
+
+
+UPDATED FIRESTORE DATA SCHEMA:
+
+  FIRESTORE COLLECTIONS:
+
+    users/{userId}
+      - uid: string
+      - role: 'admin' | 'agent'
+      - displayName: string
+      - agencyId: string? (null for admin)
+      - boundDeviceFingerprint: string
+      - maxOfflineDays: number
+      - loginExpiryAt: timestamp
+      - isActive: boolean
+      - createdAt: serverTimestamp
+      - lastLoginAt: timestamp
+
+    agencies/{agencyId}
+      - name: string
+      - code: string
+      - address: string?
+      - phone: string?
+      - adminName: string
+      - adminPhone: string
+      - receiptPrefix: number
+      - nextReceiptNumber: number
+      - customSettings: map
+      - isActive: boolean
+      - onboardedBy: string (admin UID)
+      - onboardedAt: serverTimestamp
+
+    receipts/{receiptId}
+      - receiptId: string
+      - agencyId: string
+      - createdBy: string (user UID)
+      - payerName: string
+      - payerPhone: string?
+      - categoryId: string
+      - amount: number
+      - discount: number?
+      - penalty: number?
+      - totalAmount: number
+      - status: 'active' | 'voided' | 'refunded'
+      - voidedBy: string?
+      - voidedAt: timestamp?
+      - notes: string?
+      - deviceFingerprint: string
+      - createdAt: serverTimestamp
+      - updatedAt: serverTimestamp
+
+    printLogs/{logId}
+      - receiptId: string
+      - receiptRef: string
+      - printedAt: serverTimestamp
+      - copies: number
+      - printMode: 'text' | 'image'
+      - printerName: string?
+      - printerAddress: string?
+      - printerModel: string?
+      - success: boolean
+      - errorMessage: string?
+      - printedBy: string (user UID)
+      - agencyId: string
+      - isReprint: boolean
+
+    devices/{deviceId}
+      - userId: string
+      - fingerprint: string
+      - deviceModel: string
+      - osVersion: string
+      - firstSeen: serverTimestamp
+      - lastSeen: serverTimestamp
+      - isActive: boolean
+      - deactivatedBy: string?
+
+    config/security
+      - minVersionCode: number
+      - maxOfflineDays: number
+      - loginExpiryDays: number
+      - forceSync: boolean
+      - securityAlerts: array
+      - updatedAt: serverTimestamp
+
+    security_commands/{userId}_force_sync
+      - issuedBy: string (admin UID)
+      - issuedAt: serverTimestamp
+      - resolved: boolean
+
+  ENCRYPTED SHARED PREFERENCES KEYS (unchanged concept, Firestore-backed sync):
+    - 'active_session'          — Cached user info (role, name, agencyId)
+    - 'device_fingerprint'      — Locally generated fingerprint
+    - 'last_server_sync'        — Timestamp of last successful Firestore sync
+    - 'security_config_cache'   — Cached security config from Firestore
+    - 'login_attempts_{user}'   — Failed login attempts
+    - 'min_version_code'        — Also mirrored in FlutterSecureStorage
+
+  FLUTTER SECURE STORAGE KEYS:
+    - 'encryption_master_key'     — AES-256 master key
+    - 'min_version_code'          — Minimum allowed version (monotonically increasing)
+    - 'persistent_device_id'      — UUID surviving app reinstall
+    - 'migration_completed'       — v1→v2 migration flag
+
+
+FIRESTORE ARCHITECTURE ADVANTAGES OVER REST:
+
+  1. ZERO sync code to write — Firestore handles it automatically
+  2. REAL-TIME updates — admin can see receipts as agents create them (when online)
+  3. BUILT-IN offline — no custom cache, queue, or retry logic needed
+  4. SECURITY RULES — server-side access control without a custom backend
+  5. SCALABILITY — Firestore scales automatically, no server provisioning
+  6. SIMPLER deployment — no REST API server to maintain, just Firebase project
+  7. FREE TIER — generous free tier (50K reads/day, 20K writes/day)
+  8. CONFLICT RESOLUTION — Firestore's last-write-wins is usually sufficient;
+     can use serverTimestamp for ordering
+
+
+FIRESTORE LIMITATIONS TO BE AWARE OF:
+
+  1. No server-side aggregation — count, sum, avg must be computed client-side
+     (mitigation: aggregation queries available in newer SDK, or Cloud Functions)
+  2. Query limitations — no free-text search, limited compound queries
+     (mitigation: design data model around query patterns)
+  3. Read costs — every document read costs money at scale
+     (mitigation: aggressive caching, pagination, limit queries)
+  4. Offline cache is best-effort — not encrypted by default
+     (mitigation: Firestore enables encryption on Android 23+ via settings;
+      sensitive data should still be in EncryptedSharedPreferences)
+  5. Security rules are not a substitute for client-side checks
+     (mitigation: always use both — defense in depth)
+
+
+SUMMARY: FIRESTORE IS A BETTER FIT
+
+  For an offline-first receipt collection app, Firestore + SharedPreferences
+  is SUPERIOR to a custom REST API because:
+
+  - Offline support is built-in and battle-tested
+  - Sync is automatic — no custom queue, retry, or conflict logic
+  - Firebase Auth provides real authentication (no DIY password hashing)
+  - Security Rules provide server-side access control for free
+  - Device fingerprinting, anti-tamper, and downgrade prevention all work
+    exactly the same — they are client-side features independent of backend
+  - Forced sync enforcement is achievable via:
+    (a) Tracking 'last_server_sync' timestamp locally
+    (b) Listening to Firestore 'config/security' doc for force_sync commands
+    (c) Blocking operations when offline + past maxOfflineDays
+  - The entire Section 6 (sync infrastructure) from report2.txt is eliminated,
+    saving approximately 2 weeks of development time (Phase 4)
+
+  The only things you lose by not using REST:
+  - Full control over sync timing (Firestore syncs on its own schedule)
+  - Custom conflict resolution strategies (Firestore uses last-write-wins)
+  - Custom API response formats (you use Firestore document structure)
+
+  None of these losses matter for this use case. Firestore is the right choice.
+================================================================================

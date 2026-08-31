@@ -1,0 +1,1537 @@
+================================================================================
+EREVENUE APP - IMPLEMENTATION PLAN: SECURITY, ROLES & FEATURES
+Generated: 2026-05-04
+Target Version: 2.0.0+1
+================================================================================
+
+EXECUTIVE SUMMARY
+-----------------
+This plan implements six major feature groups on top of the current
+offline-first E-Revenue Collector app (v1.0.0+1):
+
+1. Secure SharedPreferences storage with encryption
+2. Admin/Agent role-based app control
+3. Agency onboarding (admin-only)
+4. Receipt generation history
+5. Receipt printing history
+6. Offline/online security sync
+7. Fingerprinting lock (prevent APK sharing & downgrade)
+
+All features must work OFFLINE-PRIMARY with optional ONLINE sync.
+
+================================================================================
+SECTION 1: SECURE SHAREDREFERENCES WITH ENCRYPTION
+================================================================================
+
+CURRENT STATE:
+- All data stored in plain SharedPreferences (receipts, profiles, printer prefs)
+- No encryption, no integrity checks, no tamper detection
+
+1.1 Required Packages
+---------------------
+  - encrypt: ^6.0.0 (AES encryption)
+  - crypto: ^3.0.6 (SHA-256 hashing, HMAC)
+  - flutter_secure_storage: ^9.2.2 (store encryption keys in KeyStore/Keychain)
+  - shared_preferences: ^2.5.5 (already installed)
+
+1.2 Architecture: EncryptedSharedPreferences Wrapper
+-----------------------------------------------------
+Create: lib/core/security/encrypted_prefs.dart
+
+Class: EncryptedPrefs
+  - Wraps SharedPreferences with AES-256-GCM encryption
+  - Encryption key stored in FlutterSecureStorage (KeyStore/Keychain)
+  - Key derivation: PBKDF2 with device-specific salt
+  - All read/write operations transparently encrypt/decrypt
+
+  Methods:
+    - static Future<EncryptedPrefs> initialize()
+    - Future<void> writeString(String key, String value)
+    - Future<String?> readString(String key)
+    - Future<void> writeInt(String key, int value)
+    - Future<int?> readInt(String key)
+    - Future<void> writeBool(String key, bool value)
+    - Future<bool?> readBool(String key)
+    - Future<void> writeDouble(String key, double value)
+    - Future<double?> readDouble(String key)
+    - Future<void> remove(String key)
+    - Future<void> clearAll()
+    - Future<bool> verifyIntegrity() — HMAC check on stored data
+
+1.3 Key Management Strategy
+---------------------------
+  - Master encryption key generated on FIRST app launch
+  - Stored in FlutterSecureStorage (Android KeyStore / iOS Keychain)
+  - Key never leaves secure hardware enclave
+  - If key is lost (factory reset), data is unrecoverable (by design)
+  - Key rotation: optional, on admin request via sync
+
+1.4 Tamper Detection
+--------------------
+  - Each encrypted value includes an HMAC-SHA256 tag
+  - On read: verify HMAC before decryption
+  - If HMAC mismatch → data tampered → trigger security alert
+  - Store integrity_hash of entire prefs blob in secure storage
+  - On app launch: verify integrity_hash; if mismatch → lock app
+
+1.5 Migration Strategy
+----------------------
+  - On first launch of v2.0.0:
+    1. Read all existing plain SharedPreferences data
+    2. Initialize EncryptedPrefs with new encryption key
+    3. Re-write all data through encrypted wrapper
+    4. Delete plain SharedPreferences
+    5. Store migration_completed flag in secure storage
+  - If migration fails → roll back, log error, retry on next launch
+
+1.6 Files to Create
+-------------------
+  lib/core/security/encrypted_prefs.dart        — Encrypted wrapper class
+  lib/core/security/integrity_checker.dart       — HMAC verification
+  lib/core/security/key_manager.dart             — Key generation/storage
+  lib/core/security/security_exceptions.dart     — Custom exception classes
+
+1.7 Files to Modify
+-------------------
+  lib/data/models/receipt_service.dart          — Use EncryptedPrefs instead of SharedPreferences
+  lib/data/models/merchant_profile_service.dart — Use EncryptedPrefs instead of SharedPreferences
+  lib/data/services/printer_service.dart        — Use EncryptedPrefs for printer prefs
+  lib/main.dart                                 — Initialize EncryptedPrefs before runApp
+
+================================================================================
+SECTION 2: ADMIN/AGENT ROLE-BASED APP CONTROL
+================================================================================
+
+CURRENT STATE:
+- Single account type with no role differentiation
+- Login accepts any input (fake auth)
+- No user management
+
+2.1 Role Definitions
+--------------------
+  enum UserRole {
+    admin,    — Full access: agency onboarding, agent management, reports, settings
+    agent,    — Limited access: receipt creation, printing, own history, profile
+  }
+
+2.2 User Model
+--------------
+Create: lib/core/models/user_account.dart
+
+Class: UserAccount
+  Fields:
+    - String id              (UUID)
+    - String username        (agent_id or admin_id)
+    - String passwordHash    (BCrypt-style, stored encrypted)
+    - String displayName
+    - UserRole role
+    - String? agencyId       (null for admin, set for agents)
+    - String deviceFingerprint
+    - DateTime createdAt
+    - DateTime lastLoginAt
+    - DateTime? loginExpiryAt
+    - bool isActive
+    - int maxOfflineDays     (admin-settable per user)
+
+  Methods:
+    - Map<String, dynamic> toJson()
+    - factory UserAccount.fromJson()
+    - bool get isExpired       — Check loginExpiryAt
+    - int get daysUntilExpiry  — Days remaining
+
+2.3 Authentication Service
+--------------------------
+Create: lib/core/services/auth_service.dart
+
+Class: AuthService
+  Methods:
+    - static Future<AuthResult> login(String username, String password)
+        * Verify credentials against encrypted local store
+        * Check device fingerprint match
+        * Check login expiry
+        * Check account active status
+        * Return AuthResult (success/failure, user, error message)
+
+    - static Future<void> logout()
+        * Clear session state
+        * Preserve data (don't delete receipts)
+        * Navigate to login screen
+
+    - static Future<UserAccount?> getCurrentUser()
+        * Return logged-in user from encrypted session
+
+    - static Future<bool> isLoggedIn()
+        * Check if valid session exists
+
+    - static Future<void> initializeLoginPeriod(UserAccount user)
+        * Set login expiry (21 days default, configurable by admin)
+
+    - static Future<bool> isLoginExpired()
+        * Check if current user's login has expired
+
+    - static Future<void> changePassword(String oldPwd, String newPwd)
+        * Verify old password, update hash
+
+2.4 Password Hashing
+--------------------
+Create: lib/core/security/password_hasher.dart
+
+Class: PasswordHasher
+  - Use crypto package for SHA-256 + salt hashing
+  - Salt stored alongside hash (first 32 bytes)
+  - Methods:
+    - static Future<String> hash(String password)
+    - static Future<bool> verify(String password, String hash)
+
+2.5 Session Management
+----------------------
+  - Session stored in EncryptedPrefs under key 'active_session'
+  - Contains: user_id, login_timestamp, device_fingerprint, session_token
+  - Session validated on every app launch
+  - Auto-logout on:
+    * Login expiry reached
+    * Device fingerprint mismatch
+    * Account deactivated
+    * Manual logout
+
+2.6 Route Guards
+----------------
+Create: lib/core/navigation/route_guard.dart
+
+Class: RouteGuard
+  Methods:
+    - static Future<bool> requireAuth()         — Must be logged in
+    - static Future<bool> requireAdmin()         — Must be admin role
+    - static Future<bool> requireAgent()         — Must be agent role
+    - static Future<Widget> wrapProtected(Widget child) — Redirect to login if not auth
+
+  Usage:
+    - Wrap admin-only routes with requireAdmin()
+    - Wrap all app routes (except /login, /splash) with requireAuth()
+    - On guard failure → redirect to /login with reason
+
+2.7 Screen Access Control
+-------------------------
+  ADMIN-ONLY SCREENS:
+    - Agency onboarding screen
+    - Agent management screen
+    - Full system reports (all agents)
+    - Security settings
+    - Sync management
+
+  AGENT SCREENS:
+    - Receipt creation/printing (existing PrintReceiptsScreen)
+    - Own receipt history
+    - Own printing history
+    - Profile (limited fields)
+    - Printer setup
+
+  COMMON SCREENS:
+    - Login
+    - Dashboard (different views per role)
+    - Notifications
+    - Settings (limited for agents)
+
+2.8 Dashboard Role Differentiation
+-----------------------------------
+Modify: lib/presentation/screens/home/merchant_dashboard.dart
+
+  ADMIN DASHBOARD:
+    - Stats: Total agencies, Total agents, Total receipts (all), Revenue (all)
+    - Quick actions: Onboard Agency, Manage Agents, Sync Now, View Reports
+    - Recent activity feed (all agents)
+    - Pending sync queue count
+    - Security alerts panel
+
+  AGENT DASHBOARD:
+    - Stats: Today's receipts, Today's revenue, Pending sync, Printer status
+    - Quick actions: Collect Bill, Print Center, Transactions, Printer
+    - Personal recent receipts
+    - Login expiry countdown
+
+2.9 Files to Create
+-------------------
+  lib/core/models/user_account.dart              — User model with roles
+  lib/core/services/auth_service.dart            — Authentication logic
+  lib/core/security/password_hasher.dart         — Password hashing
+  lib/core/navigation/route_guard.dart           — Route protection
+  lib/presentation/screens/admin/admin_dashboard.dart    — Admin dashboard
+  lib/presentation/screens/admin/agency_onboarding_screen.dart  — Agency onboarding
+  lib/presentation/screens/admin/agent_management_screen.dart   — Agent management
+  lib/presentation/screens/admin/sync_management_screen.dart   — Sync controls
+  lib/presentation/screens/admin/security_settings_screen.dart — Security config
+
+2.10 Files to Modify
+--------------------
+  lib/main.dart                                  — Add route guards
+  lib/presentation/screens/home/merchant_dashboard.dart — Role-based views
+  lib/presentation/screens/auth/login_screen.dart — Real auth flow
+  lib/presentation/screens/settings_screen.dart  — Role-based settings
+
+================================================================================
+SECTION 3: AGENCY ONBOARDING (ADMIN-ONLY)
+================================================================================
+
+CURRENT STATE:
+- No agency concept; all data is flat/local
+- No multi-agency support
+
+3.1 Agency Model
+----------------
+Create: lib/core/models/agency.dart
+
+Class: Agency
+  Fields:
+    - String id              (UUID)
+    - String name            (e.g., "Vandeikya IGR", "Makurdi LGA")
+    - String code            (Short code, e.g., "VDK", "MKD")
+    - String? address
+    - String? phone
+    - String? email
+    - String? tin            — Tax ID Number
+    - String adminName       — Contact person
+    - String adminPhone      — Contact phone
+    - DateTime onboardedAt
+    - String onboardedBy     — Admin user ID
+    - bool isActive
+    - Map<String, dynamic>? customSettings  — Revenue categories, rates, etc.
+    - int receiptPrefix      — Receipt numbering prefix
+    - int nextReceiptNumber  — Auto-increment
+
+  Methods:
+    - Map<String, dynamic> toJson()
+    - factory Agency.fromJson()
+
+3.2 Agency Service
+------------------
+Create: lib/core/services/agency_service.dart
+
+Class: AgencyService
+  Methods:
+    - static Future<Agency> createAgency(Agency agency)
+        * Validate uniqueness of code
+        * Auto-assign receipt prefix if not set
+        * Save to encrypted storage
+        * Return created agency
+
+    - static Future<List<Agency>> getAllAgencies()
+        * Return all active agencies, sorted by name
+
+    - static Future<Agency?> getAgencyById(String id)
+    - static Future<Agency?> getAgencyByCode(String code)
+    - static Future<void> updateAgency(Agency agency)
+    - static Future<void> deactivateAgency(String id)
+    - static Future<void> reactivateAgency(String id)
+    - static Future<int> getAgencyAgentCount(String agencyId)
+    - static Future<int> getAgencyReceiptCount(String agencyId)
+
+3.3 Agent-Agency Binding
+-------------------------
+  - Each agent belongs to exactly ONE agency
+  - Agent's agencyId set during onboarding or agent creation
+  - Agent can only see data from their own agency
+  - Admin can see data from ALL agencies
+
+3.4 Revenue Category Management per Agency
+-------------------------------------------
+  - Default 32 revenue categories (from existing print_receipts_screen.dart)
+  - Each agency can:
+    * Enable/disable categories
+    * Set default amounts per category
+    * Add custom categories
+  - Stored in Agency.customSettings
+  - When agent creates receipt, use their agency's category config
+
+3.5 Agency Onboarding Screen
+-----------------------------
+Create: lib/presentation/screens/admin/agency_onboarding_screen.dart
+
+  UI Flow:
+    1. Agency基本信息 (Name, Code, Address, Phone, Email, TIN)
+    2. Admin Contact (Name, Phone, Email)
+    3. Revenue Categories (enable/disable, set defaults)
+    4. Receipt Settings (prefix, starting number)
+    5. Review & Confirm
+    6. Success → Generate agent account for agency admin
+
+  Validation:
+    - Agency code must be unique
+    - Name required
+    - At least one revenue category enabled
+    - Receipt prefix must be 2-5 characters
+
+3.6 Agent Creation (during agency onboarding)
+----------------------------------------------
+  - On agency creation, auto-create a default admin agent account
+  - Username: {agency_code}_admin (e.g., "VDK_admin")
+  - Temporary password: auto-generated, shown once
+  - Role: agent (with agency admin privileges)
+  - Device fingerprint: bound to current device
+
+3.7 Files to Create
+-------------------
+  lib/core/models/agency.dart                    — Agency model
+  lib/core/services/agency_service.dart          — Agency CRUD operations
+  lib/presentation/screens/admin/agency_onboarding_screen.dart  — Onboarding UI
+  lib/presentation/screens/admin/agent_management_screen.dart   — Agent CRUD UI
+  lib/presentation/widgets/agency_form.dart      — Reusable agency form widget
+  lib/presentation/widgets/category_config_widget.dart — Category config UI
+
+3.8 Files to Modify
+-------------------
+  lib/core/models/user_account.dart              — Add agencyId field
+  lib/presentation/screens/home/print_receipts_screen.dart — Use agency categories
+  lib/data/models/receipt.dart                   — Add agencyId field
+
+================================================================================
+SECTION 4: RECEIPT GENERATION HISTORY
+================================================================================
+
+CURRENT STATE:
+- Receipts stored in SharedPreferences as JSON strings
+- No filtering by date range, agent, agency, category
+- No export capability
+- AccountHistoryScreen is static/hardcoded (non-functional)
+
+4.1 Enhanced Receipt Model
+--------------------------
+Modify: lib/data/models/receipt.dart
+
+  New Fields to Add:
+    - String agencyId          — Which agency this receipt belongs to
+    - String createdBy         — User ID of agent who created it
+    - String? payerPhone       — Payer contact
+    - String? payerTIN         — Payer tax ID
+    - String? payerAddress     — Payer address
+    - double? discount         — Discount amount
+    - double? penalty          — Late fee / penalty
+    - double totalAmount       — amount + penalty - discount
+    - String status            — 'active', 'voided', 'refunded'
+    - String? voidedBy         — User ID who voided (if applicable)
+    - DateTime? voidedAt
+    - String? notes            — Agent notes
+    - int syncStatus           — 0=pending, 1=synced, 2=sync_failed
+    - String? serverId         — Server-side ID after sync
+
+4.2 Receipt History Service
+---------------------------
+Create: lib/core/services/receipt_history_service.dart
+
+Class: ReceiptHistoryService
+  Methods:
+    - static Future<List<Receipt>> getHistory({
+        DateTime? startDate,
+        DateTime? endDate,
+        String? agencyId,
+        String? categoryId,
+        String? createdById,
+        String? status,
+        int page = 0,
+        int pageSize = 50,
+      })
+        * Filter by multiple criteria
+        * Paginated results
+
+    - static Future<Map<String, dynamic>> getStats({
+        DateTime? startDate,
+        DateTime? endDate,
+        String? agencyId,
+        String? createdById,
+      })
+        * Returns: totalReceipts, totalRevenue, avgAmount, topCategories
+
+    - static Future<List<Map<String, dynamic>>> getCategoryBreakdown({
+        DateTime? startDate,
+        DateTime? endDate,
+        String? agencyId,
+      })
+        * Revenue breakdown by category
+
+    - static Future<Receipt> voidReceipt(String receiptId, String userId)
+        * Mark as voided, record who and when
+
+    - static Future<void> exportToCSV(
+        String filePath,
+        {DateTime? startDate, DateTime? endDate, String? agencyId}
+      )
+        * Export filtered receipts to CSV file
+        * Shareable via share_plus package
+
+    - static Future<int> getPendingSyncCount()
+        * Count receipts with syncStatus == 0
+
+4.3 Receipt History Screen
+---------------------------
+Replace: lib/presentation/screens/home/account_history_screen.dart
+
+  New AccountHistoryScreen Features:
+    - Filter bar: Date range picker, Category dropdown, Status filter
+    - Search by: Payer name, Receipt ID, Reference number
+    - Sortable columns: Date, Amount, Category, Status
+    - Pagination: Load 50 at a time
+    - Receipt detail view: Tap to see full receipt details
+    - Void receipt: Long-press → confirm → void (admin only or within 24h)
+    - Export button: CSV export with date range
+    - Sync status indicator: Pending/ Synced / Failed icon per receipt
+    - Role-based: Agents see own receipts; Admins see all
+
+  UI Layout:
+    ┌─────────────────────────────────────┐
+    │ [Date Range] [Category▼] [Status▼]  │ ← Filter bar
+    │ [🔍 Search...]                      │ ← Search bar
+    ├─────────────────────────────────────┤
+    │ 📋 RCT-001234  | Market Levy        │
+    │    John Doe    | ₦5,000   | ✅ Sync │
+    │    2026-05-04 14:30                │
+    ├─────────────────────────────────────┤
+    │ 📋 RCT-001235  | Way-In             │
+    │    Jane Smith  | ₦2,500   | ⏳ Pend │
+    │    2026-05-04 13:15                │
+    ├─────────────────────────────────────┤
+    │         [Load More...]              │
+    └─────────────────────────────────────┘
+    │ [📊 Export CSV]  [🔄 Sync Now]      │ ← Action bar
+
+4.4 Receipt Statistics Dashboard
+---------------------------------
+Create: lib/presentation/widgets/receipt_stats_widget.dart
+
+  For Admin Dashboard:
+    - Total receipts today / this week / this month
+    - Revenue breakdown by agency
+    - Top 5 revenue categories
+    - Agent performance ranking (receipts per agent)
+    - Sync health: pending / failed counts
+
+  For Agent Dashboard:
+    - Personal receipts today
+    - Personal revenue today
+    - Sync status of own receipts
+
+4.5 Files to Create
+-------------------
+  lib/core/services/receipt_history_service.dart  — History queries & stats
+  lib/presentation/widgets/receipt_stats_widget.dart — Stats display
+  lib/presentation/widgets/receipt_list_tile.dart  — Reusable receipt tile
+  lib/presentation/widgets/filter_bar.dart         — Reusable filter bar
+  lib/presentation/screens/receipt_detail_screen.dart — Receipt detail view
+
+4.6 Files to Modify
+-------------------
+  lib/data/models/receipt.dart                   — Add new fields
+  lib/data/models/receipt_service.dart           — Enhanced CRUD with filters
+  lib/presentation/screens/home/account_history_screen.dart — Full rewrite
+  lib/presentation/screens/home/print_receipts_screen.dart — Populate new fields
+  lib/presentation/screens/admin/admin_dashboard.dart — Add stats widget
+
+4.7 Additional Packages
+-----------------------
+  - csv: ^6.0.0        — CSV export
+  - share_plus: ^10.0.0 — Share exported CSV
+
+================================================================================
+SECTION 5: RECEIPT PRINTING HISTORY
+================================================================================
+
+CURRENT STATE:
+- Receipt has `isPrinted` boolean flag
+- No record of WHEN, HOW MANY COPIES, WHICH PRINTER
+- No reprint tracking
+
+5.1 Print Log Model
+-------------------
+Create: lib/core/models/print_log.dart
+
+Class: PrintLog
+  Fields:
+    - String id              (UUID)
+    - String receiptId       — FK to receipt
+    - String receiptRef      — Receipt reference number (denormalized for display)
+    - DateTime printedAt
+    - int copies             — Number of copies printed
+    - String printMode       — 'text' or 'image'
+    - String? printerName    — Friendly name of printer
+    - String? printerAddress — MAC/BLE address
+    - String? printerModel   — Printer model if detectable
+    - bool success           — Did print succeed?
+    - String? errorMessage   — Error details if failed
+    - String printedBy       — User ID
+    - String? agencyId       — Agency context
+    - bool isReprint         — True if this is a reprint
+    - int syncStatus         — 0=pending, 1=synced
+
+  Methods:
+    - Map<String, dynamic> toJson()
+    - factory PrintLog.fromJson()
+
+5.2 Print History Service
+--------------------------
+Create: lib/core/services/print_history_service.dart
+
+Class: PrintHistoryService
+  Methods:
+    - static Future<void> logPrint(PrintLog log)
+        * Called after every print attempt (success or failure)
+
+    - static Future<List<PrintLog>> getPrintHistory({
+        DateTime? startDate,
+        DateTime? endDate,
+        String? receiptId,
+        String? printerAddress,
+        bool? success,
+        String? printedBy,
+        int page = 0,
+        int pageSize = 50,
+      })
+
+    - static Future<Map<String, dynamic>> getPrintStats({
+        DateTime? startDate,
+        DateTime? endDate,
+      })
+        * Returns: totalPrints, successfulPrints, failedPrints,
+                   totalCopies, avgCopiesPerPrint, topPrinters
+
+    - static Future<List<Map<String, dynamic>>> getPrinterUsage({
+        DateTime? startDate,
+        DateTime? endDate,
+      })
+        * Usage breakdown by printer
+
+    - static Future<PrintLog> getLastPrintForReceipt(String receiptId)
+        * Get most recent print attempt for a receipt
+
+    - static Future<int> getReprintCount(String receiptId)
+        * How many times this receipt has been reprinted
+
+5.3 Print History Screen
+-------------------------
+Create: lib/presentation/screens/print_history_screen.dart
+
+  Features:
+    - Filter by: Date range, Printer, Success/Failure, Agent
+    - Search by: Receipt reference
+    - Each entry shows:
+      * Receipt reference
+      * Date/time of print
+      * Copies printed
+      * Printer used
+      * Success/Failure status
+      * Reprint badge (if applicable)
+    - Tap entry → see full print log details
+    - Retry failed print: tap → "Retry Print" button
+    - Reprint receipt: tap → "Reprint" (creates new print log entry)
+    - Export print history to CSV
+
+  UI Layout:
+    ┌─────────────────────────────────────┐
+    │ [Date Range] [Printer▼] [Status▼]   │ ← Filter bar
+    │ [🔍 Search by receipt ref...]       │ ← Search bar
+    ├─────────────────────────────────────┤
+    │ 🖨️ RCT-001234 | 2 copies           │
+    │    XP-58III   | 14:30 | ✅ Success  │
+    ├─────────────────────────────────────┤
+    │ 🖨️ RCT-001235 | 1 copy [REPRINT]   │
+    │    XP-58III   | 13:15 | ✅ Success  │
+    ├─────────────────────────────────────┤
+    │ 🖨️ RCT-001230 | 1 copy             │
+    │    Unknown    | 12:00 | ❌ Error    │
+    │    [Retry]                          │
+    ├─────────────────────────────────────┤
+    │         [Load More...]              │
+    └─────────────────────────────────────┘
+    │ [📊 Export CSV]                      │
+
+5.4 Integration with Existing Print Flow
+-----------------------------------------
+Modify: lib/presentation/screens/home/print_receipts_screen.dart
+
+  In _printReceipt() method (currently lines 518-611):
+    - BEFORE print: Create PrintLog with success=false
+    - AFTER print success: Update PrintLog with success=true, copies, printer info
+    - AFTER print failure: Update PrintLog with errorMessage
+    - Always save PrintLog via PrintHistoryService.logPrint()
+
+  Add to receipt preview sheet:
+    - Show "Last printed: {date}" if previously printed
+    - Show reprint count if > 0
+    - Warning badge: "This receipt has been reprinted N times"
+
+5.5 Files to Create
+-------------------
+  lib/core/models/print_log.dart                 — Print log model
+  lib/core/services/print_history_service.dart   — Print history CRUD
+  lib/presentation/screens/print_history_screen.dart — Print history UI
+  lib/presentation/widgets/print_log_tile.dart   — Reusable print log tile
+  lib/presentation/screens/print_log_detail_screen.dart — Detail view
+
+5.6 Files to Modify
+-------------------
+  lib/presentation/screens/home/print_receipts_screen.dart — Log prints
+  lib/data/models/receipt.dart                   — Remove isPrinted (replaced by print logs)
+  lib/main.dart                                  — Add /print-history route
+
+================================================================================
+SECTION 6: OFFLINE/ONLINE SECURITY SYNC
+================================================================================
+
+CURRENT STATE:
+- Fully offline, no sync mechanism
+- dio_client.dart is empty placeholder
+- api_constants.dart is empty placeholder
+
+6.1 Sync Architecture
+---------------------
+  Design: Store-and-forward with conflict resolution
+
+  Sync Queue Model:
+    - Each local record has syncStatus: 0=pending, 1=synced, 2=conflict
+    - SyncQueue manages pending operations
+    - FIFO order, retry with exponential backoff
+    - Max retries: 5, then mark as conflict
+
+  Sync Triggers:
+    - Manual: "Sync Now" button in dashboard
+    - Automatic: When connectivity restored (listen via connectivity_plus)
+    - Scheduled: Every 4 hours if online (background, if possible)
+    - On app launch: If last sync > 24h ago and online
+
+6.2 Sync Queue Model
+--------------------
+Create: lib/core/models/sync_queue_item.dart
+
+Class: SyncQueueItem
+  Fields:
+    - String id              (UUID)
+    - String entityType      — 'receipt', 'print_log', 'agency', 'user'
+    - String entityId        — Local entity ID
+    - String operation       — 'create', 'update', 'delete', 'void'
+    - Map<String, dynamic> payload  — Serialized entity data
+    - int priority           — 1=high (auth), 2=normal, 3=low (logs)
+    - int retryCount
+    - DateTime createdAt
+    - DateTime? lastAttemptAt
+    - DateTime? syncedAt
+    - String? errorMessage
+    - String? serverResponseId  — Server-assigned ID after sync
+
+6.3 Sync Service
+----------------
+Create: lib/core/services/sync_service.dart
+
+Class: SyncService
+  Methods:
+    - static Future<void> initialize()
+        * Set up connectivity listener
+        * Start sync if online and pending items exist
+
+    - static Future<void> queueItem(SyncQueueItem item)
+        * Add to sync queue with priority
+
+    - static Future<void> syncNow()
+        * Process all pending items in priority order
+        * Show progress to user
+        * Handle errors gracefully
+
+    - static Future<SyncStatus> getSyncStatus()
+        * Returns: pendingCount, lastSyncAt, isOnline, syncInProgress
+
+    - static Future<void> resolveConflict(String itemId, Resolution resolution)
+        * Resolution: useLocal, useServer, merge
+
+    - static Future<void> clearSyncedItems({DateTime? before})
+        * Clean up successfully synced items older than X days
+
+  Private Methods:
+    - _syncReceipts()    — Sync pending receipts
+    - _syncPrintLogs()   — Sync pending print logs
+    - _syncAgencies()    — Sync agency data (admin only)
+    - _syncUsers()       — Sync user data
+    - _pullFromServer()  — Download server updates
+    - _pushToServer()    — Upload local changes
+    - _resolveConflict() — Handle conflicts
+
+6.4 Connectivity Service
+-------------------------
+Create: lib/core/services/connectivity_service.dart
+
+Class: ConnectivityService
+  Methods:
+    - static Future<bool> isOnline()
+    - static Stream<bool> get connectivityStream
+        * Listen for connectivity changes
+        * Auto-trigger sync when going online
+
+    - static Future<ConnectivityResult> getConnectionType()
+        * wifi, mobile, none
+
+    - static Future<void> initialize()
+        * Set up stream listener
+
+6.5 API Client
+--------------
+Modify: lib/core/network/dio_client.dart
+
+Class: DioClient
+  Methods:
+    - static Future<DioClient> create({required String baseUrl})
+    - Future<Response> post(String path, {Map<String, dynamic>? data})
+    - Future<Response> get(String path, {Map<String, dynamic>? params})
+    - Future<Response> put(String path, {Map<String, dynamic>? data})
+    - Future<Response> delete(String path)
+    - void setAuthToken(String token)
+    - void clearAuthToken()
+
+  Configuration:
+    - Base URL from encrypted config
+    - Timeout: 30 seconds
+    - Retry: 3 attempts with backoff
+    - Interceptors: Auth token, logging (debug only), error handling
+
+6.6 API Endpoints (to implement on server)
+-------------------------------------------
+Modify: lib/core/constants/api_constants.dart
+
+Class: ApiConstants
+  Static fields:
+    - static const String authLogin = '/api/v1/auth/login';
+    - static const String authRefresh = '/api/v1/auth/refresh';
+    - static const String syncPush = '/api/v1/sync/push';
+    - static const String syncPull = '/api/v1/sync/pull';
+    - static const String syncStatus = '/api/v1/sync/status';
+    - static const String receipts = '/api/v1/receipts';
+    - static const String printLogs = '/api/v1/print-logs';
+    - static const String agencies = '/api/v1/agencies';
+    - static const String users = '/api/v1/users';
+    - static const String deviceRegister = '/api/v1/device/register';
+    - static const String deviceVerify = '/api/v1/device/verify';
+    - static const String securityConfig = '/api/v1/security/config';
+
+6.7 Sync Push/Pull Protocol
+-----------------------------
+  PUSH (client → server):
+    POST /api/v1/sync/push
+    Request:
+    {
+      "device_fingerprint": "sha256...",
+      "user_id": "uuid",
+      "agency_id": "uuid",
+      "sync_token": "last_sync_token",  // For incremental sync
+      "items": [
+        {
+          "entity_type": "receipt",
+          "entity_id": "local_uuid",
+          "operation": "create",
+          "payload": { ... },
+          "client_timestamp": "2026-05-04T14:30:00Z"
+        },
+        ...
+      ]
+    }
+
+    Response:
+    {
+      "success": true,
+      "sync_token": "new_sync_token",
+      "results": [
+        {
+          "entity_id": "local_uuid",
+          "server_id": "server_uuid",
+          "status": "accepted",
+          "conflict": false
+        },
+        ...
+      ],
+      "conflicts": [  // Only if any conflicts exist
+        {
+          "entity_type": "receipt",
+          "entity_id": "local_uuid",
+          "local_version": { ... },
+          "server_version": { ... },
+          "resolution_options": ["use_local", "use_server", "merge"]
+        }
+      ]
+    }
+
+  PULL (server → client):
+    POST /api/v1/sync/pull
+    Request:
+    {
+      "device_fingerprint": "sha256...",
+      "user_id": "uuid",
+      "sync_token": "last_sync_token"
+    }
+
+    Response:
+    {
+      "success": true,
+      "sync_token": "new_sync_token",
+      "updates": [
+        {
+          "entity_type": "receipt",
+          "entity_id": "server_uuid",
+          "operation": "update",  // create, update, delete
+          "payload": { ... }
+        },
+        ...
+      ],
+      "security_config": {  // Optional: push security config updates
+        "min_version_code": 3,
+        "login_expiry_days": 21,
+        "max_offline_days": 7,
+        "force_sync": false
+      }
+    }
+
+6.8 Offline Security Checks
+----------------------------
+  When OFFLINE:
+    - Allow login if last online sync was < maxOfflineDays ago
+    - Allow receipt creation/printing always
+    - Block: agency onboarding, agent creation, password change
+    - Show offline banner in dashboard
+    - Queue all changes for later sync
+
+  When ONLINE:
+    - Force sync before allowing sensitive operations
+    - Validate session token with server
+    - Check login expiry from server
+    - Download security config updates
+    - Check for app version updates
+
+  Security Config (pushed from server):
+    - min_version_code: Block older app versions
+    - login_expiry_days: Override default expiry
+    - max_offline_days: How long offline is allowed
+    - force_sync: Require immediate sync
+    - allowed_roles: Enable/disable role features remotely
+    - security_alerts: Push security warnings to clients
+
+6.9 Sync UI Components
+-----------------------
+Create: lib/presentation/widgets/sync_status_widget.dart
+
+  - Shows sync status in dashboard header
+  - Icons: ✅ Synced, ⏳ Pending (N items), ❌ Failed, 📴 Offline
+  - Tap → open sync management screen
+  - Progress indicator during sync
+
+Create: lib/presentation/screens/admin/sync_management_screen.dart
+
+  - Manual sync trigger with progress
+  - View sync queue (pending items)
+  - Retry failed syncs
+  - Resolve conflicts
+  - Sync history log
+  - Configure sync settings (admin only)
+
+6.10 Files to Create
+--------------------
+  lib/core/models/sync_queue_item.dart           — Sync queue model
+  lib/core/services/sync_service.dart            — Sync orchestration
+  lib/core/services/connectivity_service.dart    — Network monitoring
+  lib/core/network/dio_client.dart               — HTTP client (rewrite)
+  lib/core/constants/api_constants.dart          — API endpoints
+  lib/presentation/widgets/sync_status_widget.dart — Sync status UI
+  lib/presentation/screens/admin/sync_management_screen.dart — Sync admin
+  lib/core/models/sync_config.dart               — Server-pushed config
+
+6.11 Files to Modify
+--------------------
+  lib/main.dart                                  — Initialize sync/connectivity
+  lib/presentation/screens/home/merchant_dashboard.dart — Add sync status
+  lib/core/services/auth_service.dart            — Online session validation
+
+6.12 Additional Packages
+------------------------
+  - connectivity_plus: ^6.0.3  — Network status
+  - workmanager: ^0.5.2        — Background sync (optional)
+
+================================================================================
+SECTION 7: FINGERPRINTING LOCK (APK SHARING & DOWNGRADE PREVENTION)
+================================================================================
+
+CURRENT STATE:
+- No device binding
+- No version enforcement
+- APK can be copied and installed on any device
+- No downgrade protection
+
+7.1 Device Fingerprinting
+--------------------------
+Create: lib/core/security/device_fingerprint_service.dart
+
+Class: DeviceFingerprintService
+  Methods:
+    - static Future<String> generateFingerprint()
+        * Combine multiple hardware identifiers:
+          - Android ID
+          - Board, Brand, Device, Hardware, Model, Product
+          - Build fingerprint
+          - Serial number (if available)
+        * Add persistent UUID stored in FlutterSecureStorage
+          (survives app reinstall, tied to KeyStore)
+        * Hash combined string with SHA-256
+        * Return final fingerprint
+
+    - static Future<String> getOrCreateFingerprint()
+        * Return cached fingerprint if exists
+        * Generate new one if first run
+
+    - static Future<bool> isDeviceBound(String storedFingerprint)
+        * Compare current fingerprint with stored fingerprint
+        * Return true if match
+
+    - static Future<void> bindDevice(String userId, String fingerprint)
+        * Store binding: user_id → fingerprint in secure storage
+        * Store in server record (when online)
+
+    - static Future<DeviceInfo> getDeviceInfo()
+        * Return device model, OS version, build info for logging
+
+  Key Design Decisions:
+    - Persistent UUID stored in FlutterSecureStorage survives app uninstall
+    - If user factory resets device, fingerprint changes → requires re-registration
+    - Emulator detection: flag emulators differently for testing
+    - Root/jailbreak detection integrated (see 7.3)
+
+7.2 Anti-Tamper: APK Sharing Prevention
+-----------------------------------------
+  Problem: User copies APK to another device
+
+  Solutions (layered):
+    A) Device Binding (primary):
+       - On first login, bind account to device fingerprint
+       - On subsequent launches, verify fingerprint matches
+       - If mismatch → block access, show "Device mismatch" screen
+       - Admin can reset binding via dashboard
+
+    B) App Signature Verification (Android):
+       - Verify app was signed with expected signing key
+       - If APK was re-signed (pirated), signature won't match
+       - Native code check (harder to bypass from Dart)
+
+    C) Integrity Check:
+       - Check for known tampering tools (Xposed, Frida)
+       - Verify app is running in release mode (not debug)
+       - Check for emulator signatures
+
+  Implementation:
+    Create: lib/core/security/app_integrity_service.dart
+
+    Class: AppIntegrityService
+      Methods:
+        - static Future<bool> verifyAppSignature()
+            * Android: Use PackageInfo to get signing certificate
+            * Compare with known hash of production certificate
+            * If mismatch → app was re-signed → block
+
+        - static Future<bool> isRunningInDebug()
+            * Check kDebugMode flag
+            * Check for debugger attachment
+            * If debug mode in production build → block
+
+        - static Future<bool> isDeviceRooted()
+            * Check for su binary
+            * Check for known root management apps
+            * Check for test-keys in build fingerprint
+            * Use root_detection package
+
+        - static Future<bool> isEmulator()
+            * Check for emulator-specific build properties
+            * Check for goldfish, generic, sdk in build info
+            * Check for known emulator MAC addresses
+
+        - static Future<SecurityReport> runFullCheck()
+            * Run all checks
+            * Return report with pass/fail for each
+            * Calculate risk score
+            * Log results for server review
+
+7.3 Downgrade Prevention
+-------------------------
+  Problem: User installs older APK to bypass security fixes
+
+  Implementation:
+    Create: lib/core/security/version_service.dart
+
+    Class: VersionService
+      Methods:
+        - static Future<bool> isDowngrade()
+            * Get current versionCode from PackageInfo
+            * Compare with stored min_version_code in FlutterSecureStorage
+            * If current < stored → DOWNGRADE DETECTED
+
+        - static Future<void> initializeVersion()
+            * On first launch of a version:
+              - Get current versionCode
+              - If > stored min_version_code → update min_version_code
+              - Store in secure storage (persists across reinstalls)
+
+        - static Future<void> enforceVersion()
+            * If downgrade detected → clear sensitive data, block app
+            * Show full-screen blocking message
+
+        - static Future<int> getCurrentVersionCode()
+            * Return current app versionCode
+
+        - static Future<String> getCurrentVersionName()
+            * Return current version name (e.g., "2.0.0")
+
+      Storage:
+        - min_version_code stored in FlutterSecureStorage
+        - Updated only when current version is HIGHER than stored
+        - NEVER decreases (monotonically increasing)
+
+      Native Android Enhancement:
+        Create: android/app/src/main/kotlin/.../VersionProtection.kt
+
+        - Store min_version_code in SharedPreferences with MODE_PRIVATE
+        - Check in MainActivity.onCreate() BEFORE Flutter loads
+        - If downgrade detected → launch blocked activity immediately
+        - This prevents bypass by modifying Dart code
+
+7.4 Security Lock Screen
+-------------------------
+  Create: lib/presentation/screens/security_blocked_screen.dart
+
+  Scenarios that trigger this screen:
+    - Device fingerprint mismatch
+    - App version downgrade detected
+    - App signature mismatch (re-signed APK)
+    - Rooted device (if policy requires)
+    - Login expiry reached
+    - Too many failed login attempts
+    - Server sent lock command via sync
+
+  UI Elements:
+    - Red warning icon
+    - Clear reason message
+    - Device info (model, fingerprint hash)
+    - Contact support info
+    - Request code (for admin to look up)
+    - No way to bypass from within app
+
+7.5 Login Attempt Tracking
+---------------------------
+  Create: lib/core/services/login_attempt_service.dart
+
+  Class: LoginAttemptService
+    Methods:
+      - static Future<void> recordAttempt(String username, bool success)
+      - static Future<int> getFailedAttempts(String username)
+      - static Future<bool> isLockedOut(String username)
+        * Lock out after 5 failed attempts within 15 minutes
+        * Auto-unlock after 30 minutes
+      - static Future<void> resetAttempts(String username)
+        * Called on successful login
+
+  Storage:
+    - Failed attempts stored in EncryptedPrefs
+    - Lockout timestamp stored in EncryptedPrefs
+    - Auto-cleanup of old attempts (>1 hour)
+
+7.6 Admin Device Management
+-----------------------------
+  In admin dashboard:
+    - View all registered devices per agent
+    - See device model, fingerprint, last seen
+    - Reset device binding (unbind → agent can login on new device)
+    - Deactivate device (block specific device)
+    - View security incident log
+
+7.7 Files to Create
+-------------------
+  lib/core/security/device_fingerprint_service.dart  — Device fingerprinting
+  lib/core/security/app_integrity_service.dart       — Anti-tamper checks
+  lib/core/security/version_service.dart             — Downgrade prevention
+  lib/core/services/login_attempt_service.dart       — Login attempt tracking
+  lib/presentation/screens/security_blocked_screen.dart — Block screen
+  android/app/src/main/kotlin/.../VersionProtection.kt — Native version check
+  android/app/src/main/kotlin/.../BlockedActivity.kt — Native block screen
+
+7.8 Files to Modify
+-------------------
+  lib/main.dart                                  — Add security checks on startup
+  lib/presentation/screens/auth/login_screen.dart — Device binding on first login
+  lib/core/services/auth_service.dart            — Fingerprint verification
+  lib/presentation/screens/splash_screen.dart    — Run security checks before nav
+
+7.9 Additional Packages
+-----------------------
+  - device_info_plus: ^10.0.0  — Hardware identifiers
+  - package_info_plus: ^8.0.0  — App version info
+  - root_detection: ^2.0.2     — Root/jailbreak detection
+
+================================================================================
+SECTION 8: IMPLEMENTATION PHASING
+================================================================================
+
+PHASE 1: FOUNDATION (Week 1-2)
+  Priority: CRITICAL
+  Focus: Secure storage, authentication, role system
+
+  Tasks:
+    1. [ ] Add required packages to pubspec.yaml
+    2. [ ] Create EncryptedPrefs wrapper
+    3. [ ] Create PasswordHasher
+    4. [ ] Create UserAccount model
+    5. [ ] Create AuthService
+    6. [ ] Rewrite login_screen.dart with real auth
+    7. [ ] Create RouteGuard
+    8. [ ] Update main.dart with route guards
+    9. [ ] Migrate existing data to encrypted storage
+    10. [ ] Test: login, logout, session persistence
+
+PHASE 2: ROLE SYSTEM & AGENCY (Week 3-4)
+  Priority: HIGH
+  Focus: Admin/agent roles, agency onboarding
+
+  Tasks:
+    1. [ ] Create Agency model and service
+    2. [ ] Create agency onboarding screen
+    3. [ ] Create agent management screen
+    4. [ ] Update dashboard with role-based views
+    5. [ ] Update receipt model with agencyId
+    6. [ ] Add revenue category config per agency
+    7. [ ] Test: Create agency, create agent, view role differences
+
+PHASE 3: RECEIPT & PRINT HISTORY (Week 5-6)
+  Priority: HIGH
+  Focus: History tracking, filtering, export
+
+  Tasks:
+    1. [ ] Enhance Receipt model with new fields
+    2. [ ] Create ReceiptHistoryService
+    3. [ ] Rewrite account_history_screen.dart
+    4. [ ] Create PrintLog model and service
+    5. [ ] Create print_history_screen.dart
+    6. [ ] Integrate print logging into existing print flow
+    7. [ ] Add CSV export functionality
+    8. [ ] Add receipt detail screen
+    9. [ ] Test: Create receipt, print, view history, export
+
+PHASE 4: OFFLINE/ONLINE SYNC (Week 7-8)
+  Priority: HIGH
+  Focus: Sync queue, connectivity, API client
+
+  Tasks:
+    1. [ ] Implement DioClient
+    2. [ ] Define API constants
+    3. [ ] Create SyncQueueItem model
+    4. [ ] Create SyncService
+    5. [ ] Create ConnectivityService
+    6. [ ] Add sync status widget to dashboard
+    7. [ ] Create sync management screen (admin)
+    8. [ ] Implement push/pull sync protocol
+    9. [ ] Test: Offline creation, online sync, conflict resolution
+
+PHASE 5: SECURITY LOCK (Week 9-10)
+  Priority: CRITICAL
+  Focus: Device binding, downgrade prevention, anti-tamper
+
+  Tasks:
+    1. [ ] Create DeviceFingerprintService
+    2. [ ] Create AppIntegrityService
+    3. [ ] Create VersionService
+    4. [ ] Create LoginAttemptService
+    5. [ ] Create security blocked screen
+    6. [ ] Implement native version protection (Android)
+    7. [ ] Integrate all checks into splash screen
+    8. [ ] Add device management to admin dashboard
+    9. [ ] Test: Device binding, downgrade, tamper detection
+
+PHASE 6: POLISH & TESTING (Week 11-12)
+  Priority: MEDIUM
+  Focus: Integration testing, UX refinement, documentation
+
+  Tasks:
+    1. [ ] Full integration testing of all features
+    2. [ ] Edge case testing (factory reset, time change, etc.)
+    3. [ ] Performance optimization
+    4. [ ] UX refinement (loading states, error messages)
+    5. [ ] Update documentation
+    6. [ ] Prepare release build
+    7. [ ] Security audit review
+
+================================================================================
+SECTION 9: PACKAGE DEPENDENCIES SUMMARY
+================================================================================
+
+NEW PACKAGES TO ADD:
+  encrypt: ^6.0.0                    — AES encryption
+  flutter_secure_storage: ^9.2.2     — Secure key storage
+  device_info_plus: ^10.0.0          — Hardware identifiers
+  package_info_plus: ^8.0.0          — App version info
+  root_detection: ^2.0.2             — Root detection
+  connectivity_plus: ^6.0.3          — Network status
+  csv: ^6.0.0                        — CSV export
+  share_plus: ^10.0.0                — Share files
+  crypto: ^3.0.6                     — Hashing (if not already present)
+
+ALREADY INSTALLED:
+  shared_preferences: ^2.5.5         — Local storage (will be wrapped)
+  intl: ^0.20.2                      — Date formatting
+  path_provider: ^2.1.5              — File paths
+  dio: ^5.9.2                        — HTTP client (will be implemented)
+  permission_handler: ^11.3.1        — Permissions
+  screenshot: ^3.0.0                 — Receipt capture
+  image: ^3.3.0                      — Image processing
+  esc_pos_utils: ^1.1.0              — ESC/POS printing
+  blue_thermal_printer_plus: ^0.0.8  — Bluetooth printing
+
+CAN BE REMOVED (unused):
+  flutter_bloc: ^9.1.1               — Not used anywhere
+  dartz: ^0.10.1                     — Not used anywhere
+  get_it: ^9.2.1                     — Not used anywhere
+
+================================================================================
+SECTION 10: DATABASE/STORAGE SCHEMA
+================================================================================
+
+ENCRYPTED SHARED PREFERENCES KEYS:
+
+  Auth & Session:
+    - 'active_session'          — Current session data (encrypted JSON)
+    - 'login_attempts_{user}'   — Failed login attempts per user
+    - 'last_sync_token'         — Last successful sync token
+
+  Users:
+    - 'users_list'              — List of user accounts (encrypted JSON array)
+
+  Agencies:
+    - 'agencies_list'           — List of agencies (encrypted JSON array)
+
+  Receipts:
+    - 'receipts_list'           — List of receipts (encrypted JSON array)
+
+  Print Logs:
+    - 'print_logs_list'         — List of print logs (encrypted JSON array)
+
+  Sync Queue:
+    - 'sync_queue'              — Pending sync items (encrypted JSON array)
+
+  Settings:
+    - 'app_settings'            — App configuration
+    - 'security_config'         — Server-pushed security config
+
+  Printer:
+    - 'confirmed_printer_addresses' — Known printer MAC/BLE addresses
+
+FLUTTER SECURE STORAGE KEYS:
+
+  - 'encryption_master_key'     — AES-256 master encryption key
+  - 'min_version_code'          — Minimum allowed app version
+  - 'persistent_device_id'      — UUID that survives app reinstall
+  - 'device_fingerprint'        — SHA-256 device fingerprint
+  - 'device_bound_user'         — User ID bound to this device
+  - 'migration_completed'       — Flag for v1→v2 data migration
+  - 'app_signature_hash'        — Expected app signature hash
+
+================================================================================
+SECTION 11: SECURITY THREAT MODEL & MITIGATIONS
+================================================================================
+
+THREAT 1: APK copied to another device
+  Mitigation: Device fingerprint binding on first login
+  Residual Risk: Medium — Can be bypassed by copying secure storage
+
+THREAT 2: APK decompiled and re-signed
+  Mitigation: App signature verification in native code
+  Residual Risk: Low — Requires extracting and matching signature
+
+THREAT 3: Older APK installed to bypass security
+  Mitigation: Monotonically increasing min_version_code in secure storage
+  Residual Risk: Low — Requires clearing secure storage (which deletes data)
+
+THREAT 4: SharedPreferences tampered (rooted device)
+  Mitigation: HMAC integrity check on all encrypted values
+  Residual Risk: Medium — Rooted devices can bypass client-side checks
+
+THREAT 5: Device time changed to bypass expiry
+  Mitigation: Server time validation on sync; detect time jumps
+  Residual Risk: Low — Offline bypass possible but detected on next sync
+
+THREAT 6: Factory reset → fingerprint changes
+  Mitigation: Persistent UUID in KeyStore survives factory reset on most devices
+  Residual Risk: Medium — Some devices clear KeyStore on factory reset
+
+THREAT 7: Backup/restore to new device
+  Mitigation: Fingerprint includes hardware-specific identifiers
+  Residual Risk: Low — Hardware IDs won't match on different device
+
+THREAT 8: Brute force login
+  Mitigation: Login attempt tracking with lockout after 5 failures
+  Residual Risk: Low — Lockout is time-based and enforced locally
+
+THREAT 9: Offline data exfiltration
+  Mitigation: All data encrypted with device-bound key
+  Residual Risk: Low — Data is unreadable without the key
+
+THREAT 10: Sync man-in-the-middle
+  Mitigation: HTTPS only, token-based auth, payload integrity checks
+  Residual Risk: Low — Standard TLS protections
+
+================================================================================
+SECTION 12: TESTING CHECKLIST
+================================================================================
+
+AUTHENTICATION TESTS:
+  [ ] Login with valid credentials → success
+  [ ] Login with invalid credentials → failure
+  [ ] Login with correct username, wrong password → failure
+  [ ] Session persists across app restart
+  [ ] Logout clears session
+  [ ] Expired login blocks access
+  [ ] 5 failed attempts → lockout
+  [ ] Lockout auto-resolves after 30 minutes
+
+ROLE TESTS:
+  [ ] Admin sees admin dashboard
+  [ ] Agent sees agent dashboard
+  [ ] Agent cannot access agency onboarding
+  [ ] Agent cannot access agent management
+  [ ] Admin sees all receipts; agent sees own only
+
+AGENCY TESTS:
+  [ ] Create agency → appears in list
+  [ ] Agency code uniqueness enforced
+  [ ] Create agent for agency → agent sees agency data
+  [ ] Deactivate agency → agents cannot login
+  [ ] Revenue categories configurable per agency
+
+RECEIPT HISTORY TESTS:
+  [ ] Create receipt → appears in history
+  [ ] Filter by date range → correct results
+  [ ] Filter by category → correct results
+  [ ] Filter by status → correct results
+  [ ] Search by payer name → correct results
+  [ ] Void receipt → status changes, recorded
+  [ ] Export CSV → file created, data correct
+  [ ] Pagination works correctly
+
+PRINT HISTORY TESTS:
+  [ ] Print receipt → log entry created
+  [ ] Failed print → log entry with error
+  [ ] Reprint → new log entry, isReprint=true
+  [ ] Filter by printer → correct results
+  [ ] Filter by success/failure → correct results
+  [ ] Retry failed print → new attempt logged
+  [ ] Export print history CSV
+
+SYNC TESTS:
+  [ ] Create receipt offline → queued for sync
+  [ ] Go online → sync triggers automatically
+  [ ] Manual sync → processes queue
+  [ ] Sync conflict → resolution UI shown
+  [ ] Failed sync → retry with backoff
+  [ ] After 5 retries → marked as conflict
+  [ ] Pull from server → local data updated
+  [ ] Security config update → applied
+
+FINGERPRINT TESTS:
+  [ ] First login → device bound
+  [ ] Same device, relaunch → access granted
+  [ ] Different device → access blocked
+  [ ] Factory reset → re-registration required
+  [ ] Version downgrade → blocked
+  [ ] Version upgrade → min_version updated
+  [ ] App re-signed → blocked (if testable)
+  [ ] Rooted device → warning/block (per policy)
+
+INTEGRITY TESTS:
+  [ ] Tamper with SharedPreferences → detected on next read
+  [ ] Change device time → detected on sync
+  [ ] Clear secure storage → app requires re-setup
+  [ ] Emulator → flagged in security report
+
+================================================================================
+SECTION 13: USER EXPERIENCE FLOWS
+================================================================================
+
+13.1 First Launch (v2.0.0)
+  1. App generates encryption key
+  2. Migrates existing data from plain SharedPreferences
+  3. Shows "Welcome" screen with device binding consent
+  4. Admin creates first admin account
+  5. Admin can onboard agencies immediately
+  6. Admin can create agent accounts
+
+13.2 Agent First Login
+  1. Agent enters credentials (provided by admin)
+  2. Device fingerprint generated and bound
+  3. Consent screen: "This app is locked to this device"
+  4. Login successful → agent dashboard
+  5. Shows login expiry date
+
+13.3 Daily Agent Flow
+  1. Open app → auto-login (if session valid)
+  2. Dashboard shows today's stats, sync status, expiry countdown
+  3. Create receipts → saved locally, queued for sync
+  4. Print receipts → logged in print history
+  5. View history → filter, search, export
+  6. When online → auto-sync in background
+
+13.4 Admin Daily Flow
+  1. Open app → auto-login
+  2. Dashboard shows system-wide stats
+  3. Onboard new agencies
+  4. Manage agents (create, deactivate, reset device binding)
+  5. View all receipts and print history
+  6. Trigger manual sync
+  7. Resolve sync conflicts
+  8. Configure security settings
+
+13.5 Offline Scenario
+  1. Agent opens app → login succeeds (if within offline grace period)
+  2. Dashboard shows "Offline" banner
+  3. Can create receipts and print normally
+  4. All changes queued for sync
+  5. When connectivity restored → auto-sync triggers
+  6. Sync result shown in notification
+
+13.6 Security Block Scenario
+  1. App detects security violation (wrong device, downgrade, etc.)
+  2. Full-screen block screen shown
+  3. Displays reason and request code
+  4. No way to proceed within app
+  5. User must contact admin/support
+
+================================================================================
+SECTION 14: RELEASE CHECKLIST
+================================================================================
+
+PRE-RELEASE:
+  [ ] All security tests pass
+  [ ] Migration from v1.0.0 tested and verified
+  [ ] Performance: no lag from encryption overhead
+  [ ] Battery: sync and fingerprint checks don't drain battery
+  [ ] Storage: encrypted data size is reasonable
+  [ ] Error handling: all edge cases covered with user-friendly messages
+
+SECURITY REVIEW:
+  [ ] No hardcoded credentials
+  [ ] All sensitive data encrypted at rest
+  [ ] Encryption keys in secure hardware
+  [ ] App signature verification works
+  [ ] Root detection functional
+  [ ] Downgrade prevention tested
+  [ ] Device binding tested on multiple devices
+
+RELEASE PREPARATION:
+  [ ] Increment version to 2.0.0+1
+  [ ] Update pubspec.yaml version
+  [ ] Update CHANGELOG.md
+  [ ] Build release APK with production signing key
+  [ ] Test release APK on clean device
+  [ ] Document breaking changes from v1.0.0
+
+POST-RELEASE:
+  [ ] Monitor crash reports
+  [ ] Monitor sync error rates
+  [ ] Monitor device binding issues
+  [ ] Collect user feedback
+  [ ] Plan v2.1.0 improvements
+
+================================================================================
+END OF IMPLEMENTATION PLAN
+================================================================================

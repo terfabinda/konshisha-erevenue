@@ -1,0 +1,143 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isAuthenticated()
+        // The built-in demo admin account is granted admin directly so it does
+        // not depend on a pre-provisioned users document.
+        && (request.auth.token.email == 'admin@konshisha.gov.ng'
+            || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin');
+    }
+
+    function isAgent() {
+      return isAuthenticated() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'agent';
+    }
+
+    function isOwner(userId) {
+      return request.auth != null && request.auth.uid == userId;
+    }
+
+    function isActiveUser() {
+      return isAuthenticated() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isActive == true;
+    }
+
+    function getUserAgencyId() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.agencyId;
+    }
+
+    // An admin whose user document has an agencyId is scoped to that agency
+    // (they may only read data belonging to it). Admins without an agencyId
+    // are super-admins and see everything.
+    function canReadAgencyData(docAgencyId) {
+      return isAdmin() && (getUserAgencyId() == null || getUserAgencyId() == docAgencyId);
+    }
+
+    // ==================== USERS COLLECTION ====================
+    match /users/{userId} {
+      // Authenticated users can read their own document (required for login)
+      allow read: if isAuthenticated() && isOwner(userId);
+      // Admins can read all users (scoped admins are filtered by agency in
+      // the client, but admins still need access to their agency's agents).
+      allow read: if isAdmin();
+
+      // Self-registration bootstrap: allow first user creation if no users exist.
+      // The demo admin is covered by isAdmin() (email shortcut above).
+      allow create: if isAdmin()
+        || (isOwner(userId) && get(/databases/$(database)/documents/users).size == 0);
+
+      // Users can update safe fields on their own document (login tracking, device binding,
+      // and the sliding login-expiry window bounded to their configured expiryDays).
+      // Also allow role self-fix if role is currently null (admin bootstrap healing)
+      allow update: if isAdmin()
+        || (isOwner(userId) && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['lastLoginAt', 'boundDeviceFingerprint', 'isActive', 'loginExpiryAt'])
+          && (request.resource.data.loginExpiryAt == null
+              || (request.resource.data.loginExpiryAt >= request.time
+                  && request.resource.data.loginExpiryAt <= request.time + duration.value(
+                      (resource.data.expiryDays is int && resource.data.expiryDays > 0
+                          ? resource.data.expiryDays : 30) + 1, 'd'))))
+        || (isOwner(userId) && resource.data.role == null
+          && request.resource.data.role == 'admin'
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['role']));
+
+      // Only admins can delete users
+      allow delete: if isAdmin();
+    }
+
+    // ==================== AGENCIES COLLECTION ====================
+    match /agencies/{agencyId} {
+      // Admins can CRUD agencies; scoped admins only their own.
+      allow read: if canReadAgencyData(agencyId);
+      allow write: if isAdmin() && (getUserAgencyId() == null || getUserAgencyId() == agencyId);
+
+      // Agents can only read agencies (to see their agency info)
+      allow read: if isAgent();
+    }
+
+    // ==================== RECEIPTS COLLECTION ====================
+    match /receipts/{receiptId} {
+      // Admins can read receipts within their agency scope
+      allow read: if canReadAgencyData(resource.data.agencyId);
+
+      // Agents can only read their own receipts
+      allow read: if isAgent() && resource.data.createdBy == request.auth.uid;
+
+      // Agents can create receipts (must be active, correct agency)
+      allow create: if isAgent() && isActiveUser()
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.agencyId == getUserAgencyId();
+
+      // Agents can only update their own receipts (for voiding)
+      allow update: if isAgent() && resource.data.createdBy == request.auth.uid;
+
+      // Only admins can delete receipts
+      allow delete: if isAdmin();
+    }
+
+    // ==================== PRINT LOGS COLLECTION ====================
+    match /printLogs/{logId} {
+      // Admins can read print logs within their agency scope
+      allow read: if canReadAgencyData(resource.data.agencyId);
+
+      // Agents can only read their own print logs
+      allow read: if isAgent() && resource.data.printedBy == request.auth.uid;
+
+      // Anyone authenticated can create print logs
+      allow create: if isAuthenticated()
+        && request.resource.data.printedBy == request.auth.uid;
+
+      // No updates or deletes allowed
+      allow update, delete: if false;
+    }
+
+    // ==================== DEVICES COLLECTION ====================
+    match /devices/{deviceId} {
+      allow read, write: if isAdmin();
+    }
+
+    // ==================== CONFIG COLLECTION ====================
+    match /config/{configId} {
+      // Everyone can read config (needed for offline expiry checks)
+      allow read: if isAuthenticated();
+
+      // Only admins can update config
+      allow write: if isAdmin();
+    }
+
+    // ==================== SECURITY COMMANDS COLLECTION ====================
+    match /security_commands/{commandId} {
+      // Admins can CRUD commands
+      allow read, write: if isAdmin();
+
+      // Agents can only read commands meant for them
+      allow read: if isAgent() && commandId == '$(request.auth.uid)_force_sync';
+    }
+  }
+}

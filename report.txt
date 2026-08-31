@@ -1,0 +1,1062 @@
+================================================================================
+EREVENUE APP - SECURITY ENHANCEMENT ROADMAP
+Generated: 2026-05-04
+Current Version: 1.0.0+1
+================================================================================
+
+EXECUTIVE SUMMARY
+-----------------
+The E-Revenue Collector app currently has NO authentication mechanism. The
+login screen accepts any input and simply navigates to the dashboard. This
+poses significant security risks for an offline government collection app.
+
+You've requested three specific security features:
+1. Time-based login restriction (expire after 3 weeks)
+2. Version downgrade prevention
+3. Single-device installation restriction
+
+This report provides a comprehensive security roadmap with implementation
+strategies, code examples, and best practices tailored for an OFFLINE-FIRST
+Flutter app.
+
+================================================================================
+SECTION 1: CURRENT SECURITY POSTURE ANALYSIS
+================================================================================
+
+CRITICAL VULNERABILITIES IDENTIFIED:
+------------------------------------
+✓ login_screen.dart:18-19 - Hardcoded credentials in plain text
+✓ login_screen.dart:29-30 - No actual authentication; bypasses on any button press
+✓ No password validation or encryption
+✓ No session management
+✓ No device binding or fingerprinting
+✓ No app integrity checks (root/jailbreak detection)
+✓ No version enforcement
+✓ All data stored in plain SharedPreferences
+✓ No secure storage for sensitive data
+
+================================================================================
+SECTION 2: RECOMMENDED SECURITY LAYERS (Priority Order)
+================================================================================
+
+────────────────────────────────────────────────────────────────────────────────
+LAYER 1: AUTHENTICATION & AUTHORIZATION (MUST-HAVE)
+────────────────────────────────────────────────────────────────────────────────
+1.1 Implement Real Authentication
+   - Use API-based authentication with secure backend
+   - Store credentials securely using flutter_secure_storage
+   - Implement JWT token-based sessions
+   - Add password hashing (BCrypt/Argon2) on server
+
+1.2 Required Packages:
+   - flutter_secure_storage: ^9.2.2 (for secure credential storage)
+   - crypto: ^3.0.6 (for local hashing if needed)
+   - jwt_decoder: ^2.0.1 (for token validation)
+
+1.3 Secure Storage Strategy:
+   - NEVER store plain passwords
+   - Store only access/refresh tokens in secure storage
+   - Use KeyStore (Android) / Keychain (iOS) via flutter_secure_storage
+
+────────────────────────────────────────────────────────────────────────────────
+LAYER 2: TIME-BASED ACCESS CONTROL (Your Request #1)
+────────────────────────────────────────────────────────────────────────────────
+2.1 Implementation: Login Expiry After 3 Weeks
+
+Approach A: Server-Side (RECOMMENDED for true security)
+  - Server validates token expiration
+  - Client stores expiry date from server response
+  - On app start, check expiry; if expired, force logout
+
+Approach B: Client-Side Only (Vulnerable to tampering, but adds barrier)
+  - Store first login timestamp in secure storage
+  - On each app launch, check if (current_date - first_login) > 21 days
+  - If expired, clear credentials and redirect to login
+  - WARNING: Can be bypassed by clearing app data or changing device time
+
+Recommended Hybrid Approach:
+  - Store both: local expiry check + server validation on sync
+  - When offline, allow grace period but flag for server review
+  - When online, enforce server expiry strictly
+
+Code Example (lib/services/auth_service.dart):
+------------------------------------------------
+class AuthService {
+  static const _firstLoginKey = 'first_login_timestamp';
+  static const _lastLoginKey = 'last_login_timestamp';
+  static const _ expiryCheckKey = 'expiry_check_date';
+  static const int MAX_LOGIN_DAYS = 21;
+
+  // Call after successful login
+  static Future<void> initializeLoginPeriod() async {
+    final secureStore = const FlutterSecureStorage();
+    final now = DateTime.now();
+
+    // Set first login if not exists
+    final firstLogin = await secureStore.read(key: _firstLoginKey);
+    if (firstLogin == null) {
+      await secureStore.write(
+        key: _firstLoginKey,
+        value: now.millisecondsSinceEpoch.toString(),
+      );
+    }
+
+    // Always update last login
+    await secureStore.write(
+      key: _lastLoginKey,
+      value: now.millisecondsSinceEpoch.toString(),
+    );
+  }
+
+  static Future<bool> isLoginExpired() async {
+    final secureStore = const FlutterSecureStorage();
+    final firstLoginStr = await secureStore.read(key: _firstLoginKey);
+
+    if (firstLoginStr == null) return false; // No login yet
+
+    final firstLogin = DateTime.fromMillisecondsSinceEpoch(
+      int.parse(firstLoginStr),
+    );
+    final difference = DateTime.now().difference(firstLogin);
+
+    return difference.inDays >= MAX_LOGIN_DAYS;
+  }
+
+  static Future<void> enforceLoginExpiry() async {
+    if (await isLoginExpired()) {
+      await logout(); // Clear all credentials
+      throw LoginExpiredException('Login period expired. Please re-authenticate.');
+    }
+  }
+}
+
+// In SplashScreen or main.dart, call:
+// await AuthService.enforceLoginExpiry();
+
+2.2 Implementation Tips:
+   - Use UTC timestamps to avoid timezone issues
+   - Store in FlutterSecureStorage (not SharedPreferences)
+   - Consider app version: reset timer on major updates if needed
+   - Show user-friendly expiry warning 3 days before expiration
+
+────────────────────────────────────────────────────────────────────────────────
+LAYER 3: VERSION CONTROL & UPGRADE PROTECTION (Your Request #2)
+────────────────────────────────────────────────────────────────────────────────
+3.1 Prevent Downgrade Attacks
+
+Problem: User could install older APK/IPA over newer version, possibly
+bypassing security patches or accessing bugs.
+
+Solution: Implement Version Code Enforcement
+
+In pubspec.yaml:
+  version: 1.0.0+2   // +N is build number (versionCode in Android)
+
+Platform-Specific Implementation:
+
+ANDROID (android/app/build.gradle):
+------------------------------------
+android {
+    defaultConfig {
+        // Already exists, ensure it matches pubspec.yaml
+        versionCode 2
+        versionName "1.0.0"
+    }
+}
+
+Create file: android/app/src/main/java/com/erevenue/app/erevenue/VersionCheck.java
+(Or update existing MainActivity.kt)
+
+Add to MainActivity.kt/Kt:
+---------------------------
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.core.content.edit
+
+class VersionProtection {
+    companion object {
+        private const val PREFS_NAME = "app_protection_prefs"
+        private const val KEY_MIN_VERSION = "min_version_code"
+        private const val KEY_INSTALL_DATE = "install_date"
+
+        fun verifyVersion(context: Context): Boolean {
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
+            val currentVersion = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                context.packageManager.getPackageInfo(
+                    context.packageName,
+                    PackageManager.PackageInfoFlags.of(0)
+                ).longVersionCode.toInt()
+            } else {
+                @Suppress("DEPRECATION")
+                context.packageManager.getPackageInfo(
+                    context.packageName,
+                    0
+                ).versionCode
+            }
+
+            val savedMinVersion = prefs.getInt(KEY_MIN_VERSION, currentVersion)
+
+            // If current version is lower than saved minimum, block
+            if (currentVersion < savedMinVersion) {
+                return false // Downgrade detected
+            }
+
+            // Update minimum if this is a newer version
+            if (currentVersion > savedMinVersion) {
+                prefs.edit().putInt(KEY_MIN_VERSION, currentVersion).apply()
+            }
+
+            return true
+        }
+    }
+}
+
+In MainActivity.onCreate():
+---------------------------
+if (!VersionProtection.verifyVersion(this)) {
+    // Show error and exit
+    val intent = Intent(this, BlockedActivity::class.java)
+    startActivity(intent)
+    finish()
+    return
+}
+
+IOS (ios/Runner/Info.plist):
+---------------------------
+<key>MinimumOSVersion</key>
+<string>13.0</string>
+<!-- Already prevents older OS, but NOT app version downgrade -->
+
+For iOS, prevent downgrade via:
+  a) App Store only (no sideloading) - automatic
+  b) If enterprise/managed: use server-side version check on launch
+
+Flutter-side Cross-Platform Check (lib/services/version_service.dart):
+----------------------------------------------------------------------
+import 'dart:io';
+import 'package:package_info_plus/package_info_plus.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+
+class VersionService {
+  static const _storage = FlutterSecureStorage();
+  static const _minVersionKey = 'min_allowed_version_code';
+
+  static Future<bool> isVersionDowngrade() async {
+    final packageInfo = await PackageInfo.fromPlatform();
+    final currentVersionCode = int.parse(packageInfo.buildNumber);
+
+    final savedMin = await _storage.read(key: _minVersionKey);
+    if (savedMin == null) {
+      await _storage.write(
+        key: _minVersionKey,
+        value: currentVersionCode.toString(),
+      );
+      return false;
+    }
+
+    final minVersion = int.parse(savedMin);
+
+    if (currentVersionCode < minVersion) {
+      return true; // DOWNGRADE DETECTED
+    }
+
+    if (currentVersionCode > minVersion) {
+      await _storage.write(
+        key: _minVersionKey,
+        value: currentVersionCode.toString(),
+      );
+    }
+
+    return false;
+  }
+
+  static Future<void> handleVersionCheck() async {
+    if (await isVersionDowngrade()) {
+      // Clear sensitive data and show blocked screen
+      await _clearAppData();
+      throw VersionDowngradeException(
+        'Invalid app version detected. Please update to the latest version.'
+      );
+    }
+  }
+}
+
+Call this in SplashScreen before navigating to login.
+
+3.2 Additional Protection: Integrity Checks
+   - Verify app signature (Android: SafetyNet attestation / Play Integrity)
+   - Detect rooted/jailbroken devices
+   - Prevent debug mode in production
+
+Code Example (lib/services/integrity_service.dart):
+---------------------------------------------------
+import 'dart:io';
+import 'package:device_info_plus/device_info_plus.dart';
+import 'package:root_detection/root_detection.dart';
+
+class IntegrityService {
+  static Future<bool> isDeviceSecure() async {
+    // Check for root/jailbreak
+    final isRooted = await RootDetection.isRooted;
+
+    // Check for debug mode
+    final isDebug = Platform.isAndroid
+        ? await _isAndroidDebug()
+        : await _isIOSDebug();
+
+    // Check for known security threats
+    if (isRooted || isDebug) {
+      return false;
+    }
+
+    return true;
+  }
+
+  static Future<bool> _isAndroidDebug() async {
+    final androidInfo = await DeviceInfoPlugin().androidInfo;
+    return androidInfo.isSecure ?? false; // false if debug/rooted
+  }
+
+  static Future<bool> _isIOSDebug() async {
+    final iosInfo = await DeviceInfoPlugin().iosInfo;
+    return !iosInfo.model.contains("Simulator"); // Basic check
+  }
+}
+
+────────────────────────────────────────────────────────────────────────────────
+LAYER 4: SINGLE-DEVICE INSTALL RESTRICTION (Your Request #3)
+────────────────────────────────────────────────────────────────────────────────
+4.1 Hardware-Based Device Fingerprinting
+
+Generate unique device fingerprint and bind account to it.
+
+Implementation Strategy:
+
+Option A: Device ID + Hardware Hash (Best for offline)
+  - Combine multiple hardware identifiers
+  - Hash the combination for privacy
+  - Store fingerprint on server and locally
+  - On new install, compare with stored fingerprint
+
+Option B: Android ID / iOS Identifier for Vendor (IDFV)
+  - Platform-specific, limited by privacy restrictions
+  - May change on factory reset
+
+Option C: UUID stored in secure storage + hardware fingerprint
+  - Create persistent device ID
+  - Cannot be reset by app reinstall (if stored in keystore)
+
+Recommended Hybrid Approach:
+
+lib/services/device_fingerprint_service.dart:
+---------------------------------------------
+import 'dart:io';
+import 'dart:convert';
+import 'dart:math';
+import 'package:crypto/crypto.dart';
+import 'package:device_info_plus/device_info_plus.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+
+class DeviceFingerprintService {
+  static const _storage = FlutterSecureStorage();
+  static const _fingerprintKey = 'device_fingerprint';
+  static final _deviceInfo = DeviceInfoPlugin();
+
+  static Future<String> generateFingerprint() async {
+    List<String> identifiers = [];
+
+    try {
+      if (Platform.isAndroid) {
+        final androidInfo = await _deviceInfo.androidInfo;
+        identifiers.addAll([
+          androidInfo.androidId ?? 'unknown_android_id',
+          androidInfo.board ?? 'unknown_board',
+          androidInfo.brand ?? 'unknown_brand',
+          androidInfo.device ?? 'unknown_device',
+          androidInfo.hardware ?? 'unknown_hardware',
+          androidInfo.host ?? 'unknown_host',
+          androidInfo.id ?? 'unknown_id',
+          androidInfo.model ?? 'unknown_model',
+          androidInfo.product ?? 'unknown_product',
+          if (androidInfo.serialNumber != null)
+            androidInfo.serialNumber!,
+        ]);
+      } else if (Platform.isIOS) {
+        final iosInfo = await _deviceInfo.iosInfo;
+        identifiers.addAll([
+          iosInfo.identifierForVendor ?? 'unknown_ios_vendor',
+          iosInfo.model ?? 'unknown_model',
+          iosInfo.systemName ?? 'unknown_system',
+          iosInfo.systemVersion ?? 'unknown_version',
+          iosInfo.localizedModel ?? 'unknown_localized',
+        ]);
+      }
+    } catch (e) {
+      debugPrint('Error collecting device info: $e');
+    }
+
+    // Add storage-specific identifier (persists across app reinstalls on same device)
+    final storageId = await _storage.read(key: 'persistent_device_id');
+    if (storageId == null) {
+      final newId = _generateRandomId();
+      await _storage.write(key: 'persistent_device_id', value: newId);
+      identifiers.add(newId);
+    } else {
+      identifiers.add(storageId);
+    }
+
+    // Create hash of combined identifiers
+    final combined = identifiers.join('|');
+    final bytes = utf8.encode(combined);
+    final hash = sha256.convert(bytes);
+
+    return hash.toString();
+  }
+
+  static String _generateRandomId() {
+    final random = Random.secure();
+    final values = List<int>.generate(32, (i) => random.nextInt(256));
+    return base64Url.encode(values).replaceAll('=', '');
+  }
+
+  static Future<String> getOrCreateFingerprint() async {
+    final stored = await _storage.read(key: _fingerprintKey);
+    if (stored != null) {
+      return stored;
+    }
+
+    final fingerprint = await generateFingerprint();
+    await _storage.write(key: _fingerprintKey, value: fingerprint);
+    return fingerprint;
+  }
+
+  static Future<bool> isDeviceRegistered(String serverFingerprint) async {
+    final localFingerprint = await getOrCreateFingerprint();
+    return localFingerprint == serverFingerprint;
+  }
+
+  static Future<void> registerDeviceOnServer(String agentId) async {
+    final fingerprint = await getOrCreateFingerprint();
+    // Send to server: POST /api/device/register
+    // Body: {agent_id: agentId, fingerprint: fingerprint, registered_at: DateTime.now()}
+  }
+}
+
+Usage Flow:
+-----------
+1. On first successful login: bind agent to device fingerprint
+2. On subsequent logins: compare current fingerprint with stored fingerprint
+3. If mismatch: flag as multi-device attempt, require admin verification
+4. Optionally: allow admin to re-bind via support request
+
+Server-Side Requirements:
+  - Store device_fingerprint in agent's record
+  - On login, compare fingerprint
+  - Provide admin interface to reset/update fingerprint
+  - Log all fingerprint changes for audit
+
+4.2 Limitations and Considerations:
+   - Factory reset will change fingerprint → requires re-registration
+   - Rooted/jailbroken devices may spoof identifiers
+   - User privacy compliance (GDPR, NDPR) - inform users about device tracking
+   - Backup/restore across devices may trigger mismatch
+   - Testing on emulators requires special handling
+
+4.3 Enhanced Approach: Multi-Factor Device Binding
+   - Combine fingerprint with:
+     * First login timestamp (tie to specific date)
+     * Last sync timestamp
+     * Number of installations
+     * Geolocation hints (city/region from GPS when available)
+   - Calculate "risk score" and flag anomalies
+
+================================================================================
+SECTION 3: IMPLEMENTATION ROADMAP (Phased Approach)
+================================================================================
+
+PHASE 1: IMMEDIATE (Week 1) - Critical Security Gaps
+────────────────────────────────────────────────────
+Priority: CRITICAL
+- Remove hardcoded credentials
+- Implement basic authentication with backend API
+- Add flutter_secure_storage for token storage
+- Add simple version check (prevent obvious downgrades)
+- Add root detection
+
+Deliverables:
+  ✓ [ ] auth_service.dart - Authentication logic
+  ✓ [ ] secure_storage_service.dart - Secure storage wrapper
+  ✓ [ ] integrity_service.dart - Root/jailbreak detection
+  ✓ [ ] Update login_screen.dart - Real API call
+  ✓ [ ] Add version_code check in SplashScreen
+
+PHASE 2: SHORT-TERM (Week 2-3) - Time-Based Restrictions
+─────────────────────────────────────────────────────────
+Priority: HIGH
+- Implement 3-week login expiry
+- Add device fingerprinting (basic)
+- Bind agent to first registered device
+- Server-side: add device_fingerprint column to agents table
+- Server-side: add login_expiry_date column (optional)
+
+Deliverables:
+  ✓ [ ] device_fingerprint_service.dart
+  ✓ [ ] Update auth_service.dart with expiry logic
+  ✓ [ ] Update SplashScreen to run all security checks
+  ✓ [ ] Backend API changes
+  ✓ [ ] Database migration
+
+PHASE 3: MEDIUM-TERM (Month 2) - Advanced Protections
+──────────────────────────────────────────────────────
+Priority: MEDIUM
+- Implement SafetyNet/Play Integrity (Android)
+- Implement App Attest (iOS)
+- Add tamper detection (debug mode, signature verification)
+- Add comprehensive logging/audit trail
+- Implement OTA configuration updates (security policies)
+
+Deliverables:
+  ✓ [ ] integrity_service.dart extensions
+  ✓ [ ] audit_log_service.dart
+  ✓ [ ] config_service.dart (remote security policy)
+  ✓ [ ] Backend audit endpoints
+
+PHASE 4: LONG-TERM (Month 3+) - Enterprise Features
+────────────────────────────────────────────────────
+Priority: LOW (Optimization)
+- Biometric authentication (fingerprint/face)
+- Self-service device unbinding
+- Admin dashboard for device management
+- Remote wipe capability
+- Anomaly detection (unusual location, multiple login attempts)
+
+================================================================================
+SECTION 4: CODE INTEGRATION POINTS
+================================================================================
+
+4.1 Splash Screen Security Check Flow
+   lib/presentation/screens/splash_screen.dart:
+   ---------------------------------------------
+   @override
+   void initState() {
+     super.initState();
+     _performSecurityChecks();
+   }
+
+   Future<void> _performSecurityChecks() async {
+     try {
+       // 1. Check app version
+       await VersionService.handleVersionCheck();
+
+       // 2. Check device integrity
+       final isSecure = await IntegrityService.isDeviceSecure();
+       if (!isSecure) {
+         _showSecurityBlock('Device security compromised');
+         return;
+       }
+
+       // 3. Check login expiry (if already logged in)
+       if (await AuthService.hasActiveSession()) {
+         await AuthService.enforceLoginExpiry();
+       }
+
+       // 4. Proceed after checks
+       Timer(const Duration(seconds: 3), () {
+         Navigator.pushReplacementNamed(context, '/login');
+       });
+     } catch (e) {
+       _showSecurityBlock(e.toString());
+     }
+   }
+
+4.2 Login Screen Integration
+   lib/presentation/screens/auth/login_screen.dart:
+   ------------------------------------------------
+   Future<void> _handleLogin() async {
+     try {
+       setState(() => _isLoading = true);
+
+       // Validate input
+       if (_agentIdController.text.isEmpty ||
+           _passwordController.text.isEmpty) {
+         throw ValidationException('Please fill all fields');
+       }
+
+       // Call authentication service
+       final result = await AuthService.login(
+         agentId: _agentIdController.text.trim(),
+         password: _passwordController.text,
+       );
+
+       if (result.success) {
+         // Store secure session
+         await AuthService.storeSession(result.token, result.user);
+
+         // Initialize login period
+         await AuthService.initializeLoginPeriod();
+
+         // Register device fingerprint to server (first login only)
+         final fingerprint = await DeviceFingerprintService.getOrCreateFingerprint();
+         if (result.isFirstLogin) {
+           await DeviceFingerprintService.registerDeviceOnServer(result.user.id);
+         }
+
+         // Navigate to dashboard
+         Navigator.pushReplacementNamed(context, '/dashboard');
+       } else {
+         _showError(result.message);
+       }
+     } catch (e) {
+       _showError(e.toString());
+     } finally {
+       setState(() => _isLoading = false);
+     }
+   }
+
+4.3 Dashboard Guard (Middleware Pattern)
+   Create lib/core/navigation/auth_guard.dart:
+
+   class AuthGuard {
+     static Future<bool> canAccess(BuildContext context) async {
+       final hasSession = await AuthService.hasActiveSession();
+       if (!hasSession) {
+         Navigator.pushReplacementNamed(context, '/login');
+         return false;
+       }
+
+       final isExpired = await AuthService.isLoginExpired();
+       if (isExpired) {
+         await AuthService.logout();
+         Navigator.pushReplacementNamed(context, '/login');
+         return false;
+       }
+
+       final deviceOk = await DeviceFingerprintService.verifyDevice();
+       if (!deviceOk) {
+         _showDeviceMismatchDialog(context);
+         return false;
+       }
+
+       return true;
+     }
+   }
+
+   Wrap all protected routes with this guard.
+
+================================================================================
+SECTION 5: OFFLINE CONSIDERATIONS & WORKAROUNDS
+================================================================================
+
+Challenge: App works offline → security checks must work without network.
+
+5.1 Offline Login Validation
+   Problem: Cannot validate credentials against server when offline.
+
+   Solutions:
+   a) Grace Period: Allow offline login for 7 days with warning banner
+   b) cached credentials: Verify against cached hash (security risk)
+   c) Force online sync: Block login if offline for >24 hours
+   d) Hybrid: Allow limited features offline, block sensitive operations
+
+   Recommended (c): Since it's government collection, require online sync
+   daily. Block login if offline >24h AND last sync >24h ago.
+
+   Code:
+   - Store last_sync_timestamp in secure storage
+   - On app start: check if now - last_sync > 24h and device is offline
+   - If true: show "Please connect to internet to verify credentials" screen
+
+5.2 Offline Device Verification
+   - Fingerprint is stored locally and on server
+   - When offline: compare local fingerprint with stored fingerprint
+   - If match: allow access (secure since stored in keystore)
+   - When online: re-verify with server for audit
+
+5.3 Offline Version Check
+   - Store last_known_good_version_code in secure storage
+   - On launch: if current version < stored version → downgrade detected
+   - Only updates when app successfully launches (not on failed launch)
+
+5.4 Offline Expiry Check
+   - Store expiry_date locally (derived from first_login + 21 days)
+   - Check against device time (vulnerable to time change)
+   - Mitigation: on each successful online sync, update expiry from server
+   - If offline and expiry passed → block access
+
+================================================================================
+SECTION 6: SERVER-SIDE API REQUIREMENTS
+================================================================================
+
+6.1 Authentication Endpoint
+   POST /api/v1/auth/login
+   Request:
+     {
+       "agent_id": "string",
+       "password": "string",
+       "device_fingerprint": "sha256_hash",
+       "app_version_code": 2,
+       "platform": "android"
+     }
+
+   Response:
+     {
+       "success": true,
+       "token": "jwt_token",
+       "refresh_token": "refresh_token",
+       "expires_at": "2026-05-25T11:00:00Z",
+       "user": {
+         "id": "uuid",
+         "name": "Agent Name",
+         "agent_id": "agent@erevenue.ng",
+         "is_first_login": false,
+         "allowed_until": "2026-05-25T11:00:00Z"
+       },
+       "requires_device_binding": true/false
+     }
+
+6.2 Device Registration Endpoint
+   POST /api/v1/device/register
+   Request:
+     {
+       "agent_id": "uuid",
+       "fingerprint": "sha256_hash",
+       "device_model": " Samsung SM-A746",
+       "os_version": "Android 14",
+       "app_version": "1.0.0+2"
+     }
+
+   Response:
+     {
+       "success": true,
+       "device_id": "uuid",
+       "registered_at": "2026-05-04T11:00:00Z"
+     }
+
+6.3 Device Verification Endpoint
+   GET /api/v1/device/verify?agent_id=xxx&fingerprint=xxx
+   Response:
+     {
+       "valid": true/false,
+       "message": "Device mismatch detected",
+       "registered_devices": [
+         {
+           "id": "uuid",
+           "fingerprint": "sha256",
+           "registered_at": "...",
+           "last_seen": "..."
+         }
+       ]
+     }
+
+6.4 Version Validation Endpoint (Optional)
+   GET /api/v1/app/version/check?current=2
+   Response:
+     {
+       "minimum_supported_version": 2,
+       "latest_version": 3,
+       "force_update": false,
+       "message": "Please update to version 3 for security patches"
+     }
+
+6.5 Admin Endpoints (Backoffice)
+   - GET /api/v1/admin/agents/{id}/devices - List all bound devices
+   - POST /api/v1/admin/agents/{id}/devices/{device_id}/unbind
+   - PUT /api/v1/admin/agents/{id}/reset-device-binding
+   - GET /api/v1/admin/security/logs - Audit trail
+
+6.6 Database Schema Changes
+   ALTER TABLE agents ADD COLUMN:
+     - device_fingerprint VARCHAR(255) NULL
+     - login_expiry_date DATETIME NULL
+     - last_login_at DATETIME NULL
+     - last_device_id VARCHAR(255) NULL
+
+   CREATE TABLE agent_devices:
+     - id (PK)
+     - agent_id (FK)
+     - fingerprint VARCHAR(255) UNIQUE
+     - device_model VARCHAR(100)
+     - os_version VARCHAR(50)
+     - app_version VARCHAR(50)
+     - first_seen DATETIME
+     - last_seen DATETIME
+     - is_active BOOLEAN
+
+================================================================================
+SECTION 7: PACKAGE DEPENDENCIES TO ADD
+================================================================================
+
+pubspec.yaml additions:
+-----------------------
+dependencies:
+  flutter_secure_storage: ^9.2.2          # Secure credential storage
+  package_info_plus: ^8.0.0               # App version info
+  device_info_plus: ^10.0.0               # Hardware identifiers
+  crypto: ^3.0.6                          # SHA256 hashing
+  root_detection: ^2.0.2                 # Root/jailbreak detection
+  jwt_decoder: ^2.0.1                    # JWT token parsing
+  connectivity_plus: ^6.0.3              # Network status check
+
+Optional (Advanced):
+  firebase_crashlytics: ^4.0.0           # Crash reporting
+  flutter_fingerprint: ^1.0.0            # Biometric auth
+  safety_net: ^0.2.0                     # Android SafetyNet attestation
+
+================================================================================
+SECTION 8: CONFIGURATION CHANGES
+================================================================================
+
+8.1 Android (android/app/src/main/AndroidManifest.xml):
+  <application
+    android:name=".Application"
+    android:allowBackup="false"  <!-- Prevent backup restore to other devices -->
+    android:fullBackupContent="false"
+    android:usesCleartextTraffic="false"  <!-- Enforce HTTPS only -->
+    ...>
+
+  <!-- Add permissions (if not already) -->
+  <uses-permission android:name="android.permission.INTERNET" />
+  <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+8.2 iOS (ios/Runner/Info.plist):
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <key>NSAllowsArbitraryLoads</key>
+    <false/>
+  </dict>
+
+  <key>UIDeviceFamily</key>
+  <array>
+    <integer>1</integer>  <!-- iPhone only, not iPad -->
+  </array>
+
+================================================================================
+SECTION 9: USER EXPERIENCE & COMMUNICATION
+================================================================================
+
+9.1 First-Time Login Flow
+   - Explain device binding: "This app will be locked to this device for
+     security. You won't be able to install it on another phone."
+   - Get explicit consent (required for GDPR/NDPR compliance)
+   - Show expiry date: "Access valid until: May 25, 2026"
+
+9.2 Expiry Notifications
+   - Day 14: Show warning: "Your access expires in 7 days"
+   - Day 18: Show warning: "Access expires in 3 days - contact admin"
+   - Day 20: Show warning: "LAST DAY - Access expires tomorrow"
+   - Day 21: Show blocked screen with contact info
+
+9.3 Device Mismatch Scenario
+   If user tries to login on different device:
+   - Show: "This account is registered to a different device"
+   - Display: "Registered device: Samsung Galaxy S23"
+   - Provide: "Contact administrator to reset device binding"
+   - Optionally: Show request code to email admin
+
+9.4 Downgrade Detection
+   Show full-screen blocking message:
+   "SECURITY ALERT: Invalid app version detected.
+    This app version is not authorized. Please update immediately.
+    Contact support: support@erevenue.ng"
+
+================================================================================
+SECTION 10: TESTING & VALIDATION
+================================================================================
+
+10.1 Unit Tests to Write
+   - test: AuthService.isLoginExpired() returns correct boolean
+   - test: VersionService.isVersionDowngrade() detects lower version
+   - test: DeviceFingerprintService generates consistent fingerprint
+   - test: IntegrityService detects rooted device
+
+10.2 Integration Tests
+   - test: Full security check flow in SplashScreen
+   - test: Login blocks after 21 days
+   - test: Device binding prevents second device login
+   - test: Version downgrade is blocked
+
+10.3 Manual QA Checklist
+   [ ] Install v1.0.0+1, login, wait 21 days, verify blocked
+   [ ] Install v1.0.0+2, then try to install v1.0.0+1, verify blocked
+   [ ] Login on Device A, try login on Device B, verify blocked on B
+   [ ] Root test device, attempt login, verify blocked
+   [ ] Clear app data, verify first login flow triggers correctly
+   [ ] Offline mode >24h, verify login blocked or grace period works
+   [ ] Factory reset device, verify re-registration required
+
+================================================================================
+SECTION 11: RISKS & MITIGATIONS
+================================================================================
+
+Risk 1: Users lock themselves out after 21 days
+  Mitigation:
+    - Send email reminder 5 days before expiry
+    - Provide admin override portal
+    - Allow 3-day grace period with admin approval
+
+Risk 2: Device malfunction/factory reset requires re-registration
+  Mitigation:
+    - Allow admin to reset device binding via dashboard
+    - Verify identity through support ticket + agent ID verification
+    - Audit all device resets
+
+Risk 3: Rooted device users circumvent protections
+  Mitigation:
+    - Implement strong root detection
+    - Require online validation every 24h
+    - Log security events for monitoring
+    - Consider remote wipe capability
+
+Risk 4: Offline app cannot reach server for validation
+  Mitigation:
+    - Implement 24h offline grace period
+    - Cache last known good state
+    - Block sensitive operations if offline too long
+
+Risk 5: Timezone manipulation to bypass expiry
+  Mitigation:
+    - Use UTC timestamps exclusively
+    - On online sync, verify with server time
+    - Detect significant time jumps (e.g., >1 day change)
+
+Risk 6: Backup/restore from cloud (Google Drive/iCloud) restores
+        fingerprint to new device
+  Mitigation:
+    - Include app-specific salt in fingerprint generation
+    - On fingerprint mismatch, require online verification
+    - Flag as potential security incident
+
+================================================================================
+SECTION 12: MAINTENANCE & MONITORING
+================================================================================
+
+12.1 Server-Side Monitoring
+   - Log all login attempts (success/failure)
+   - Alert on: multiple device attempts, expired logins, downgrade attempts
+   - Dashboard: Active devices per agent, expiry dates, security incidents
+
+12.2 Client-Side Health Checks
+   - Daily: Run integrity check, report on next sync
+   - Weekly: Verify expiry status, warn user
+   - On app update: Re-validate fingerprint, version, integrity
+
+12.3 Incident Response Plan
+   - If downgrade attack detected → force update, notify admin
+   - If device mismatch → lock account, require admin review
+   - If expired login detected → allow grace period with support ticket
+   - If rooted device → warn user, allow limited functionality?
+
+================================================================================
+SECTION 13: COMPLIANCE & LEGAL
+================================================================================
+
+13.1 Privacy Notices Required
+   - Inform users: "This app uses device fingerprinting to prevent unauthorized
+     use on multiple devices."
+   - GDPR/NDPR compliance: Device fingerprint = personal data
+   - Provide right to access/delete stored device IDs
+   - Document lawful basis: "Legitimate interests - security of government
+     collection system"
+
+13.2 Terms of Service Updates
+   Add clause:
+   "Users may only install and use this application on a single registered
+   device. Attempting to install on multiple devices, modify the application,
+   or bypass security controls may result in access revocation."
+
+13.3 Data Retention
+   - Keep security logs for minimum 1 year
+   - Retain device binding records for audit
+   - Define data deletion process for agent offboarding
+
+================================================================================
+SECTION 14: QUICK START - MINIMAL VIABLE IMPLEMENTATION
+================================================================================
+
+If you want to start immediately with the 3 most impactful changes:
+
+Step 1: Add secure storage & basic auth
+   - Add flutter_secure_storage to pubspec.yaml
+   - Replace hardcoded credentials with API call
+   - Store JWT token in secure storage
+
+Step 2: Add 21-day expiry check
+   - Create AuthService with enforceLoginExpiry()
+   - Call from SplashScreen before navigation
+   - Show expiry dialog when within 3 days
+
+Step 3: Add basic version check
+   - Add version_code comparison in SplashScreen
+   - Store min_version_code in secure storage
+   - Show error and exit if downgrade detected
+
+This gives you immediate protection while you build out the full system.
+
+================================================================================
+SECTION 15: RECOMMENDED NEXT STEPS
+================================================================================
+
+Week 1 Tasks:
+  1. [ ] Create security_services/ directory in lib/
+  2. [ ] Implement AuthService with secure storage
+  3. [ ] Implement VersionService with downgrade detection
+  4. [ ] Implement IntegrityService with root detection
+  5. [ ] Update SplashScreen to run security checks
+  6. [ ] Update LoginScreen to call real API
+  7. [ ] Add required packages to pubspec.yaml
+  8. [ ] Remove hardcoded credentials
+
+Week 2 Tasks:
+  1. [ ] Implement DeviceFingerprintService
+  2. [ ] Add device binding to server API
+  3. [ ] Update login to register fingerprint
+  4. [ ] Add login expiry logic
+  5. [ ] Create admin endpoint for device management
+  6. [ ] Write unit tests for security services
+
+Week 3 Tasks:
+  1. [ ] Implement remote version check API (optional)
+  2. [ ] Add offline grace period handling
+  3. [ ] Create admin dashboard for device unbinding
+  4. [ ] Add audit logging service
+  5. [ ] Write integration tests
+  6. [ ] Manual security QA testing
+
+Week 4 Tasks:
+  1. [ ] Code review of all security changes
+  2. [ ] Penetration testing (basic)
+  3. [ ] Deploy to staging for UAT
+  4. [ ] Update user documentation
+  5. [ ] Train support staff on device reset process
+  6. [ ] Go-live with monitoring in place
+
+================================================================================
+CONCLUSION
+================================================================================
+
+The E-Revenue app currently has zero authentication, making it highly
+vulnerable to unauthorized use. Your requested features are essential for
+a government financial application.
+
+Priority Actions:
+1. Remove hardcoded credentials immediately
+2. Implement real backend authentication
+3. Add 21-day login expiry (server-enforced)
+4. Prevent version downgrade via version_code check
+5. Implement device fingerprinting for single-device binding
+
+The biggest challenge is the offline nature. Plan for:
+- Online sync requirement every 24h
+- Grace periods for network outages
+- Manual admin override process for legitimate edge cases
+
+Success depends on server-side implementation. Client-side checks alone
+can be bypassed by determined attackers.
+
+All recommendations assume you have a backend server ready. If you don't,
+priority #0 is building the authentication backend.
+
+================================================================================
+END OF REPORT
+================================================================================

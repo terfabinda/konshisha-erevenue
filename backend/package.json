@@ -1,0 +1,25 @@
+{
+  "name": "erevenue-backend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Konshisha IGR backend: Node.js API (Vercel), Supabase DB, and admin web dashboard",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm --workspace @erevenue/api run dev",
+    "dev:admin": "npm --workspace @erevenue/admin-web run dev",
+    "build": "npm run build --workspaces",
+    "lint": "npm run lint --workspaces",
+    "typecheck": "npm run typecheck --workspaces",
+    "db:migrate": "node scripts/migrate.js",
+    "db:seed": "node scripts/seed.js"
+  },
+  "devDependencies": {
+    "pg": "^8.13.1"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
