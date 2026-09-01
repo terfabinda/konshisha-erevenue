@@ -5,6 +5,7 @@ import '../constants/app_strings.dart';
 import '../constants/firestore_paths.dart';
 import '../models/user_account.dart';
 import '../security/encrypted_prefs.dart';
+import '../../sync/cloud_login_logger.dart';
 import 'login_attempt_service.dart';
 import 'security_config_service.dart';
 
@@ -19,7 +20,9 @@ class AuthService {
       final locked = await LoginAttemptService.isLockedOut(email);
       if (locked) {
         final remaining = await LoginAttemptService.getLockoutRemainingMinutes(email);
-        return AuthResult.failure('Account locked. Try again in $remaining minutes.');
+        final msg = 'Account locked. Try again in $remaining minutes.';
+        unawaited(CloudLoginLogger.log(email: email, success: false, failureReason: msg));
+        return AuthResult.failure(msg);
       }
 
       if (email == AppStrings.demoEmail && password == AppStrings.demoPassword) {
@@ -30,10 +33,25 @@ class AuthService {
         final user = await _signInDemoAccount(email, password);
         if (user == null) {
           // Offline (or demo account unavailable): local-only demo session.
-          return await _demoSession(email, now);
+          final result = await _demoSession(email, now);
+          unawaited(CloudLoginLogger.log(
+            email: email,
+            success: result.success,
+            userId: result.user?.uid,
+            displayName: result.user?.displayName,
+            agencyId: result.user?.agencyId,
+          ));
+          return result;
         }
 
         await LoginAttemptService.recordAttempt(email, true);
+        unawaited(CloudLoginLogger.log(
+          email: email,
+          success: true,
+          userId: user.uid,
+          displayName: user.displayName,
+          agencyId: user.agencyId,
+        ));
         return AuthResult.success(user);
       }
 
@@ -51,6 +69,7 @@ class AuthService {
 
       if (!userDoc.exists) {
         await FirebaseAuth.instance.signOut();
+        unawaited(CloudLoginLogger.log(email: email, success: false, failureReason: 'No account found', userId: uid));
         return AuthResult.failure('No account found. Contact an administrator.');
       }
 
@@ -59,6 +78,14 @@ class AuthService {
 
       if (!initialUser.isActive) {
         await FirebaseAuth.instance.signOut();
+        unawaited(CloudLoginLogger.log(
+          email: email,
+          success: false,
+          failureReason: 'Account deactivated',
+          userId: uid,
+          displayName: initialUser.displayName,
+          agencyId: initialUser.agencyId,
+        ));
         return AuthResult.failure('Account has been deactivated.');
       }
 
@@ -94,6 +121,7 @@ class AuthService {
 
       final user = await getCurrentUser();
       if (user == null) {
+        unawaited(CloudLoginLogger.log(email: email, success: false, failureReason: 'Failed to load session', userId: uid));
         return AuthResult.failure('Failed to load user session.');
       }
 
@@ -101,13 +129,27 @@ class AuthService {
 
       await LoginAttemptService.recordAttempt(email, true);
 
+      unawaited(CloudLoginLogger.log(
+        email: email,
+        success: true,
+        userId: user.uid,
+        displayName: user.displayName,
+        agencyId: user.agencyId,
+      ));
+      // flush any previously queued login logs
+      unawaited(CloudLoginLogger.flushQueue());
+
       return AuthResult.success(user);
     } on FirebaseAuthException catch (e) {
       await LoginAttemptService.recordAttempt(email, false);
-      return AuthResult.failure(_mapAuthError(e));
+      final msg = _mapAuthError(e);
+      unawaited(CloudLoginLogger.log(email: email, success: false, failureReason: msg));
+      return AuthResult.failure(msg);
     } catch (e) {
       await LoginAttemptService.recordAttempt(email, false);
-      return AuthResult.failure('An unexpected error occurred: $e');
+      final msg = 'An unexpected error occurred: $e';
+      unawaited(CloudLoginLogger.log(email: email, success: false, failureReason: msg));
+      return AuthResult.failure(msg);
     }
   }
 

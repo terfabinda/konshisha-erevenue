@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 
+import 'cloud_login_logger.dart';
 import 'sync_config.dart';
 import 'sync_service.dart';
 
@@ -77,6 +78,7 @@ class AutoSyncService {
     _runningController.add(true);
     try {
       await SyncService.instance.syncNow();
+      await CloudLoginLogger.flushQueue();
     } catch (_) {
       // Never let an internal error crash the background loop.
     } finally {

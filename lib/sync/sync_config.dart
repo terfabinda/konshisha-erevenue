@@ -7,10 +7,9 @@ class SyncConfig {
   SyncConfig._();
 
   /// Base URL of the Node.js API (Vercel deployment).
-  /// Example: `https://erevenue-api.vercel.app/api`
   static const String apiBaseUrl = String.fromEnvironment(
     'EREVENUE_API_URL',
-    defaultValue: 'http://localhost:8080/api',
+    defaultValue: 'https://konshisha-erevenue.vercel.app/api',
   );
 
   /// Supabase project URL (kept for future direct-REST use / migrations).

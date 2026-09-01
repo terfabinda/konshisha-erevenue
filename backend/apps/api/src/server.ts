@@ -11,6 +11,7 @@ import { registerStatsRoutes } from './routes/stats'
 import { registerCategoryRoutes } from './routes/categories'
 import { registerSecurityRoutes } from './routes/security'
 import { registerAgentRoutes } from './routes/agents'
+import { registerLoginLogRoutes } from './routes/loginLogs'
 
 dotenv.config()
 
@@ -32,6 +33,7 @@ export function buildApp() {
   app.register(registerCategoryRoutes, { prefix: '/api/categories' })
   app.register(registerSecurityRoutes, { prefix: '/api/security' })
   app.register(registerAgentRoutes, { prefix: '/api/agents' })
+  app.register(registerLoginLogRoutes, { prefix: '/api/login-logs' })
 
   // Serve the admin-web SPA (built into apps/api/public before deploy).
   // Resolve the directory robustly across dev (source), compiled (dist), and

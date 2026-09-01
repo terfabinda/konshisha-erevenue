@@ -11,6 +11,10 @@ interface LoginLog {
   agency_name: string | null
   login_at: string
   user_agent: string | null
+  platform: string | null
+  device_name: string | null
+  os_version: string | null
+  device_fingerprint: string | null
   success: boolean
   failure_reason: string | null
 }
@@ -94,7 +98,8 @@ export default function LoginLogs() {
             <th>Agent</th>
             <th>Agency</th>
             <th>Status</th>
-            <th>Device / UA</th>
+            <th>Platform</th>
+            <th>Device</th>
             <th>Time</th>
           </tr>
         </thead>
@@ -114,14 +119,21 @@ export default function LoginLogs() {
                   <div style={{ fontSize: '0.75rem', color: '#991b1b', marginTop: 4 }}>{l.failure_reason}</div>
                 )}
               </td>
-              <td style={{ maxWidth: 280, fontSize: '0.8rem', color: 'var(--muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={l.user_agent ?? ''}>
-                {l.user_agent ? l.user_agent.slice(0, 80) : '—'}
+              <td>
+                <div style={{ fontSize: '0.85rem' }}>{l.platform ?? '—'}</div>
+                <div style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>{l.os_version ?? ''}</div>
+              </td>
+              <td style={{ maxWidth: 260, fontSize: '0.8rem', color: 'var(--muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={`${l.device_name ?? ''} ${l.user_agent ?? ''}`}>
+                {l.device_name ? (
+                  <div><strong style={{ color: '#111827' }}>{l.device_name}</strong></div>
+                ) : null}
+                <div style={{ fontSize: '0.75rem' }}>{l.user_agent ? l.user_agent.slice(0, 70) : '—'}</div>
               </td>
               <td>{new Date(l.login_at).toLocaleString()}</td>
             </tr>
           ))}
           {filtered.length === 0 && (
-            <tr><td colSpan={5} style={{ textAlign: 'center', color: 'var(--muted)' }}>No login activity yet</td></tr>
+            <tr><td colSpan={6} style={{ textAlign: 'center', color: 'var(--muted)' }}>No login activity yet</td></tr>
           )}
         </tbody>
       </table>

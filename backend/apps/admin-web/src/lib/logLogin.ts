@@ -31,6 +31,20 @@ export async function logLogin(opts: {
       }
     }
 
+    const ua = typeof navigator !== 'undefined' ? navigator.userAgent.slice(0, 400) : null
+    const platform =
+      typeof navigator !== 'undefined'
+        ? ((navigator as any).userAgentData?.platform as string) ??
+          (navigator.platform as string) ??
+          null
+        : null
+    // crude OS version from UA
+    let osVersion: string | null = null
+    try {
+      const m = ua?.match(/(Windows NT [^;)]+|Mac OS X [^;)]+|Android [^;)]+|iPhone OS [^;)]+)/)
+      if (m) osVersion = m[1].slice(0, 100)
+    } catch {}
+
     await supabase.from('login_logs').insert({
       user_id: uid,
       email: opts.email,
@@ -38,7 +52,10 @@ export async function logLogin(opts: {
       agency_id: agencyId,
       agency_code: agencyCode,
       agency_name: agencyName,
-      user_agent: typeof navigator !== 'undefined' ? navigator.userAgent.slice(0, 400) : null,
+      user_agent: ua,
+      platform: platform?.slice(0, 50) ?? null,
+      device_name: null,
+      os_version: osVersion,
       success: opts.success,
       failure_reason: opts.failure_reason ?? null,
     })
