@@ -39,6 +39,15 @@ export default function Receipts() {
   const fmt = (n?: number | string | null) =>
     '₦' + Number(n ?? 0).toLocaleString('en-NG', { maximumFractionDigits: 2 })
 
+  const stats = (() => {
+    const total = receipts.length
+    const revenue = receipts.reduce((s, r) => s + Number(r.total_amount ?? 0), 0)
+    const active = receipts.filter((r) => r.status === 'active').length
+    const voided = total - active
+    const avg = total ? revenue / total : 0
+    return { total, revenue, active, voided, avg }
+  })()
+
   const onVoid = async (r: Receipt) => {
     if (!window.confirm(`Void receipt ${r.receipt_ref ?? r.id}? This cannot be undone.`)) return
     setVoidingId(r.id)
@@ -79,6 +88,29 @@ export default function Receipts() {
       </div>
 
       {error && <div className="error">{error}</div>}
+
+      <div className="grid">
+        <div className="card">
+          <div className="label">Receipts (filtered)</div>
+          <div className="value">{stats.total}</div>
+          <div className="sub">{stats.total === 200 ? 'Showing latest 200' : `${stats.total} found`}</div>
+        </div>
+        <div className="card">
+          <div className="label">Total Revenue</div>
+          <div className="value">{fmt(stats.revenue)}</div>
+          <div className="sub">Avg {fmt(stats.avg)}</div>
+        </div>
+        <div className="card">
+          <div className="label">Active</div>
+          <div className="value">{stats.active}</div>
+          <div className="sub">{stats.voided} voided</div>
+        </div>
+        <div className="card">
+          <div className="label">Voided Value</div>
+          <div className="value">{fmt(receipts.filter((r) => r.status === 'voided').reduce((s, r) => s + Number(r.total_amount ?? 0), 0))}</div>
+          <div className="sub">of filtered</div>
+        </div>
+      </div>
 
       <table>
         <thead>
