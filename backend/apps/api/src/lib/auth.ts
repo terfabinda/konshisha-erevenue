@@ -32,10 +32,21 @@ export async function requireAuth(request: FastifyRequest, reply: FastifyReply):
   }
 
   const appMeta = (data.user.app_metadata ?? {}) as Record<string, unknown>
+  let role = (appMeta.role as string) ?? ''
+  // Fallback to profiles.role (covers users created via Dashboard + manual profile insert)
+  if (!role) {
+    try {
+      const svc = (await import('./supabase')).getServiceSupabase()
+      const { data: prof } = await svc.from('profiles').select('role').eq('id', data.user.id).single()
+      if (prof?.role) role = prof.role as string
+    } catch {
+      /* ignore */
+    }
+  }
   request.user = {
     id: data.user.id,
     email: data.user.email ?? '',
-    role: (appMeta.role as string) ?? 'agent',
+    role: role || 'agent',
     app_metadata: appMeta,
   }
   request.supabaseToken = token
