@@ -37,8 +37,10 @@ function generateMemorablePassword(): string {
   return `SunFox${10 + Math.floor(Math.random()*90)}!`
 }
 
+type AgentRow = Profile & { counts?: any; agencies?: { name: string; code: string } | null }
+
 export default function Agents() {
-  const [agents, setAgents] = useState<(Profile & { counts?: any })[]>([])
+  const [agents, setAgents] = useState<AgentRow[]>([])
   const [agencies, setAgencies] = useState<Agency[]>([])
   const [showForm, setShowForm] = useState(false)
   const [form, setForm] = useState({ ...emptyForm })
@@ -51,13 +53,13 @@ export default function Agents() {
   const load = () => {
     supabase
       .from('profiles')
-      .select('*')
+      .select('*, agencies:agency_id(name, code)')
       .eq('role', 'agent')
       .order('created_at', { ascending: false })
       .then(async ({ data, error }) => {
         if (error || !data) return
         const withCounts = await Promise.all(
-          data.map(async (a: Profile) => {
+          (data as AgentRow[]).map(async (a) => {
             const r = await supabase
               .from('receipts')
               .select('total_amount', { count: 'exact', head: true })
@@ -238,7 +240,7 @@ export default function Agents() {
             <tr key={a.id}>
               <td>{a.display_name}</td>
               <td>{a.username}</td>
-              <td>{a.agency_id?.slice(0, 8) ?? '—'}</td>
+              <td>{a.agencies ? `${a.agencies.code} — ${a.agencies.name}` : '—'}</td>
               <td>{a.counts?.receipts ?? 0}</td>
               <td>{a.counts?.prints ?? 0}</td>
               <td>{a.bound_device_fingerprint ? 'Yes' : 'No'}</td>
