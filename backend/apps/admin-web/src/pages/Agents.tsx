@@ -12,6 +12,31 @@ const emptyForm = {
   expiry_days: '',
 }
 
+function generateMemorablePassword(): string {
+  const adjs = ['Bold','Calm','Swift','Bright','Brave','Kind','Wise','Fierce','Noble','Quick','Sunny','Merry','Clever','Grand','Fresh','Lucky','Rapid','Solid']
+  const nouns = ['Tiger','Eagle','River','Stone','Hawk','Lion','Wolf','Peak','Flame','Storm','Bliss','Grove','Cedar','Maple','Brook','Ember','Harbor','Summit']
+  const syms = ['!','@','#','$','%','&','*']
+  for (let attempt = 0; attempt < 30; attempt++) {
+    const adj = adjs[Math.floor(Math.random() * adjs.length)]
+    const noun = nouns[Math.floor(Math.random() * nouns.length)]
+    const num = String(10 + Math.floor(Math.random() * 90))
+    const sym = syms[Math.floor(Math.random() * syms.length)]
+    // build candidate and enforce 8-10 chars
+    let candidate = `${adj}${noun}${num}${sym}`
+    if (candidate.length > 10) {
+      // shorten by trimming the longer word
+      const excess = candidate.length - 10
+      if (adj.length > noun.length) candidate = `${adj.slice(0, adj.length - excess)}${noun}${num}${sym}`
+      else candidate = `${adj}${noun.slice(0, noun.length - excess)}${num}${sym}`
+    } else if (candidate.length < 8) {
+      candidate = `${candidate}${syms[Math.floor(Math.random() * syms.length)]}`
+    }
+    if (candidate.length >= 8 && candidate.length <= 10) return candidate
+  }
+  // fallback
+  return `SunFox${10 + Math.floor(Math.random()*90)}!`
+}
+
 export default function Agents() {
   const [agents, setAgents] = useState<(Profile & { counts?: any })[]>([])
   const [agencies, setAgencies] = useState<Agency[]>([])
@@ -20,6 +45,8 @@ export default function Agents() {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
+  const [copied, setCopied] = useState(false)
 
   const load = () => {
     supabase
@@ -57,6 +84,23 @@ export default function Agents() {
 
   const set = (k: keyof typeof emptyForm) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     setForm((f) => ({ ...f, [k]: e.target.value }))
+
+  const generate = () => {
+    const pwd = generateMemorablePassword()
+    setForm((f) => ({ ...f, password: pwd }))
+    setShowPassword(true)
+    setCopied(false)
+  }
+
+  const copyPassword = async () => {
+    try {
+      await navigator.clipboard.writeText(form.password)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 2000)
+    } catch {
+      /* ignore */
+    }
+  }
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -123,8 +167,30 @@ export default function Agents() {
               <input type="email" value={form.email} onChange={set('email')} required />
             </div>
             <div className="form-row">
-              <label>Password *</label>
-              <input type="password" value={form.password} onChange={set('password')} required minLength={6} />
+              <label>Password * <span style={{ fontWeight: 400, color: 'var(--muted)', fontSize: '0.8rem' }}>(8–10 chars, memorable)</span></label>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  value={form.password}
+                  onChange={set('password')}
+                  required
+                  minLength={8}
+                  placeholder="e.g. BoldTiger42!"
+                  style={{ flex: 1 }}
+                />
+                <button type="button" className="btn secondary small" onClick={() => setShowPassword((s) => !s)} title={showPassword ? 'Hide' : 'Show'}>
+                  {showPassword ? 'Hide' : 'Show'}
+                </button>
+              </div>
+              <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                <button type="button" className="btn small" onClick={generate}>Generate</button>
+                {form.password && (
+                  <button type="button" className="btn small secondary" onClick={copyPassword}>
+                    {copied ? 'Copied!' : 'Copy'}
+                  </button>
+                )}
+                <span style={{ fontSize: '0.8rem', color: 'var(--muted)' }}>{form.password.length >= 8 ? '✓ 8–10 chars, upper/lower/number/symbol' : 'Generate a strong memorable password'}</span>
+              </div>
             </div>
             <div className="form-row">
               <label>Agency</label>
