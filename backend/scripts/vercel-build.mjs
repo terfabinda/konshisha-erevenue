@@ -68,7 +68,7 @@ fs.writeFileSync(
   path.join(apiFuncDir, '.vc-config.json'),
   JSON.stringify(
     {
-      runtime: 'nodejs20.x',
+      runtime: 'nodejs22.x',
       handler: 'index.cjs',
       launcherType: 'Nodejs',
       maxDuration: 10,
