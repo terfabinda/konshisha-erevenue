@@ -34,24 +34,33 @@ export async function registerAgencyRoutes(app: FastifyInstance) {
 
   // Create agency (admin)
   app.post('/', async (request, reply) => {
-    if (!(await requireAuth(request, reply))) return
-    if (request.user!.role !== 'admin') return reply.code(403).send({ error: 'admin only' })
-    const { name, code, address, phone, email, tin, admin_name, admin_phone } =
-      request.body as Record<string, unknown>
-    const sb = getSupabaseForUser(request.supabaseToken!)
-    const { data, error } = await sb.from('agencies').insert({
-      name,
-      code: String(code).toUpperCase(),
-      address,
-      phone,
-      email,
-      tin,
-      admin_name,
-      admin_phone,
-      onboarded_by: request.user!.id,
-    }).select().single()
-    if (error) return reply.code(400).send({ error: error.message })
-    return reply.code(201).send(data)
+    try {
+      if (!(await requireAuth(request, reply))) return
+      if (request.user!.role !== 'admin') return reply.code(403).send({ error: 'admin only' })
+      const { name, code, address, phone, email, tin, admin_name, admin_phone } =
+        (request.body as Record<string, unknown>) ?? {}
+      if (!name || !code) return reply.code(400).send({ error: 'name and code are required' })
+      const sb = getSupabaseForUser(request.supabaseToken!)
+      const { data, error } = await sb.from('agencies').insert({
+        name: String(name).trim(),
+        code: String(code).trim().toUpperCase(),
+        address: address ? String(address).trim() : null,
+        phone: phone ? String(phone).trim() : null,
+        email: email ? String(email).trim() : null,
+        tin: tin ? String(tin).trim() : null,
+        admin_name: admin_name ? String(admin_name).trim() : null,
+        admin_phone: admin_phone ? String(admin_phone).trim() : null,
+        onboarded_by: request.user!.id,
+      }).select().single()
+      if (error) {
+        request.log.error({ err: error, body: request.body }, 'agencies insert failed')
+        return reply.code(400).send({ error: error.message, details: error.details, hint: error.hint, code: error.code })
+      }
+      return reply.code(201).send(data)
+    } catch (err) {
+      request.log.error(err, 'unhandled agencies POST error')
+      return reply.code(500).send({ error: (err as Error).message, stack: (err as Error).stack?.slice(0, 500) })
+    }
   })
 
   // Update agency
