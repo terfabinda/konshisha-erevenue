@@ -253,11 +253,13 @@ export default function Agents() {
                 <button className="btn small secondary" onClick={() => toggleActive(a)}>
                   {a.is_active ? 'Block' : 'Activate'}
                 </button>{' '}
-                {a.bound_device_fingerprint && (
-                  <button className="btn small secondary" onClick={() => resetDevice(a)}>
-                    Reset device
-                  </button>
-                )}
+                <button
+                  className="btn small secondary"
+                  onClick={() => resetDevice(a)}
+                  title={a.bound_device_fingerprint ? `Bound: ${a.bound_device_fingerprint.slice(0, 12)}…` : 'No device currently bound — clears any lock so agent can sign in on another device'}
+                >
+                  Reset device
+                </button>
               </td>
             </tr>
           ))}

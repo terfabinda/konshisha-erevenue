@@ -10,6 +10,7 @@ import Categories from './pages/Categories'
 import Notifications from './pages/Notifications'
 import Security from './pages/Security'
 import Bills from './pages/Bills'
+import LoginLogs from './pages/LoginLogs'
 import Sidebar from './components/Sidebar'
 import Login from './pages/Login'
 
@@ -74,6 +75,7 @@ export default function App() {
           <Route path="/bills" element={<Bills />} />
           <Route path="/notifications" element={<Notifications />} />
           <Route path="/security" element={<Security />} />
+          <Route path="/login-logs" element={<LoginLogs />} />
           <Route path="*" element={<Dashboard />} />
         </Routes>
       </div>

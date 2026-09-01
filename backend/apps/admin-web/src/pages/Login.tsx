@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
+import { logLogin } from '../lib/logLogin'
 
 export default function Login() {
   const [email, setEmail] = useState('')
@@ -11,10 +12,21 @@ export default function Login() {
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
-    const { error } = await supabase.auth.signInWithPassword({ email, password })
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password })
     if (error) {
       setError(error.message)
+      await logLogin({ email, success: false, failure_reason: error.message })
       return
+    }
+    await logLogin({
+      email,
+      success: true,
+      user_id: data.user?.id ?? null,
+      display_name: (data.user?.user_metadata as any)?.display_name ?? null,
+    })
+    // also bump last_login_at for quick Agents table sorting
+    if (data.user?.id) {
+      supabase.from('profiles').update({ last_login_at: new Date().toISOString() }).eq('id', data.user.id).then(() => {})
     }
     navigate('/')
   }

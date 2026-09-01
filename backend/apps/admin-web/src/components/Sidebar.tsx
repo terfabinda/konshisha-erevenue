@@ -37,6 +37,9 @@ export default function Sidebar() {
         <NavLink to="/security" className={({ isActive }) => (isActive ? active : '')}>
           Security
         </NavLink>
+        <NavLink to="/login-logs" className={({ isActive }) => (isActive ? active : '')}>
+          Login Activity
+        </NavLink>
       </nav>
       <div style={{ padding: '20px', marginTop: 'auto' }}>
         <button className="btn secondary small" onClick={logout}>
