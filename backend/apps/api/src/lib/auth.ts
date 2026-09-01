@@ -50,43 +50,31 @@ export async function requireAuth(request: FastifyRequest, reply: FastifyReply):
 
   // Fallback: try Firebase Admin verification
   try {
-    const adminNs = await import('firebase-admin') as any
-    const admin = adminNs.default ?? adminNs
-    if (!admin.apps.length) {
+    const { getApps, initializeApp } = await import('firebase-admin/app')
+    const { getAuth } = await import('firebase-admin/auth') as any
+    if (getApps().length === 0) {
+      try { initializeApp(); } catch {}
+    }
+    const auth = getAuth()
+    const decoded = await auth.verifyIdToken(token)
+    const uid = decoded.uid
+    const email = decoded.email ?? ''
+    let role = (decoded['role'] as string) ?? ''
+    if (!role) {
       try {
-        admin.initializeApp()
+        const svc = (await import('./supabase')).getServiceSupabase()
+        const { data: prof } = await svc.from('profiles').select('role').eq('id', uid).single()
+        if (prof?.role) role = prof.role as string
       } catch {}
     }
-    if (admin.apps.length) {
-      const decoded = await admin.auth().verifyIdToken(token)
-      const uid = decoded.uid
-      const email = decoded.email ?? ''
-      // Try to get role from Supabase profiles (if mirrored) or from Firebase custom claims
-      let role = (decoded['role'] as string) ?? ''
-      if (!role) {
-        try {
-          const svc = (await import('./supabase')).getServiceSupabase()
-          const { data: prof } = await svc.from('profiles').select('role').eq('id', uid).single()
-          if (prof?.role) role = prof.role as string
-        } catch {}
-      }
-      // Also try Firestore for legacy Firebase users
-      if (!role) {
-        try {
-          const svc = (await import('./supabase')).getServiceSupabase()
-          const { data: prof } = await svc.from('profiles').select('role').eq('id', uid).single()
-          if (prof?.role) role = prof.role as string
-        } catch {}
-      }
-      request.user = {
-        id: uid,
-        email,
-        role: role || 'agent',
-        app_metadata: decoded as Record<string, unknown>,
-      }
-      request.supabaseToken = token
-      return true
+    request.user = {
+      id: uid,
+      email,
+      role: role || 'agent',
+      app_metadata: decoded as Record<string, unknown>,
     }
+    request.supabaseToken = token
+    return true
   } catch {}
 
   reply.code(401).send({ error: 'invalid token' })
