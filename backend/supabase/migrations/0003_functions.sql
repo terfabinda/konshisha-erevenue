@@ -17,7 +17,7 @@ begin
   elsif public.is_scoped_admin() then
     return format('agency_id = %L::uuid', public.get_agency_id());
   else
-    return format('created_by = %L::uuid', auth.uid());
+    return format('created_by = %L::text', auth.uid());
   end if;
 end;
 $$;
@@ -95,18 +95,18 @@ begin
                + coalesce((r->>'penalty')::numeric, 0)
                - coalesce((r->>'discount')::numeric, 0);
 
-      insert into receipts (
+insert into receipts (
         id, agency_id, created_by, payer_name, payer_phone, payer_tin,
         payer_address, category_id, category_name, description, amount,
         discount, penalty, total_amount, quantity, notes, device_fingerprint, status
       )
       values (
         r->>'id',
-        (r->>'agency_id')::uuid,
+        case when (r->>'agency_id') ~ '^[0-9a-f-]{36}$' then (r->>'agency_id')::uuid else null end,
         auth.uid(),
         coalesce(r->>'payer_name', ''),
         r->>'payer_phone', r->>'payer_tin', r->>'payer_address',
-        nullif(r->>'category_id','')::uuid,
+        case when (r->>'category_id') ~ '^[0-9a-f-]{36}$' then (r->>'category_id')::uuid else null end,
         coalesce(r->>'category_name',''),
         r->>'description',
         coalesce((r->>'amount')::numeric, 0),
