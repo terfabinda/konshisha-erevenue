@@ -7,6 +7,8 @@ import '../../core/security/encrypted_prefs.dart';
 import '../../core/services/auth_service.dart';
 import '../../core/models/user_account.dart';
 import '../../core/utils/friendly_error.dart';
+import '../../sync/sync_service.dart';
+import '../../sync/cloud_login_logger.dart';
 
 class ReceiptService {
   static final _collection = FirebaseFirestore.instance.collection(FirestorePaths.receipts);
@@ -498,45 +500,66 @@ class ReceiptService {
     try {
       final pendingReceipts = await _getPendingReceipts();
       if (pendingReceipts.isEmpty) return 0;
+
+      // Prefer the Node API sync (handles Supabase RLS via service_role and
+      // works for both Firebase and Supabase authed users). Fall back to
+      // direct Supabase/Firestore if the Node API is unavailable.
+      try {
+        // Lazy import to avoid cycle — SyncService is the source of truth for cloud sync
+        final sync = await _tryNodeApiSync();
+        if (sync != null) return sync;
+      } catch (_) {
+        // fall through to direct sync
+      }
+
       int synced = 0;
       for (final receipt in pendingReceipts) {
         bool didSync = false;
         // Try Supabase primary
         try {
           final data = receipt.toSupabase();
-          // Ensure enriched fields that toSupabase misses are present
           data['total_amount'] = receipt.effectiveTotal;
           data['created_at'] = receipt.createdAt.toIso8601String();
-          if (receipt.updatedAt != null) {
-            data['updated_at'] = receipt.updatedAt!.toIso8601String();
-          }
-          if (receipt.voidedBy != null) {
-            data['voided_by'] = receipt.voidedBy;
-          }
-          if (receipt.voidedAt != null) {
-            data['voided_at'] = receipt.voidedAt!.toIso8601String();
-          }
+          if (receipt.updatedAt != null) data['updated_at'] = receipt.updatedAt!.toIso8601String();
+          if (receipt.voidedBy != null) data['voided_by'] = receipt.voidedBy;
+          if (receipt.voidedAt != null) data['voided_at'] = receipt.voidedAt!.toIso8601String();
           data['id'] = receipt.id;
           await _supabase.from('receipts').upsert(data);
           didSync = true;
         } catch (_) {
-          // Fallback to Firestore
           try {
             await _collection.add(receipt.toJson());
             didSync = true;
-          } catch (_) {
-            // Also try Node API SyncService if available (best-effort); keep offline behavior
-            // If both Supabase and Firestore fail, we keep the item pending for retry
-          }
+          } catch (_) {}
         }
         if (didSync) {
           await _removeFromPending(receipt.id);
           synced++;
         }
       }
+      if (synced == 0 && pendingReceipts.isNotEmpty) {
+        throw Exception('Unable to sync. Your receipt is saved locally and will be uploaded automatically when the connection is stable. If this persists, please contact support.');
+      }
       return synced;
     } catch (e) {
-      throw Exception(friendlyError(e));
+      final msg = e.toString().toLowerCase().contains('exception:') ? e.toString().replaceFirst('Exception: ', '') : e.toString();
+      if (msg.contains('cloud_firestore') || msg.contains('supabase') || msg.contains('postgrest') || msg.contains('socket') || msg.contains('timeout')) {
+        throw Exception(friendlyError(e));
+      }
+      rethrow;
+    }
+  }
+
+  static Future<int?> _tryNodeApiSync() async {
+    try {
+      final result = await SyncService.instance.syncNow();
+      final synced = result.receiptsSynced;
+      if (synced > 0) return synced;
+      if (result.hadFailures && synced == 0) return null;
+      // If we had pending but Node API synced 0 without failure, treat as no-op to allow fallback
+      return null;
+    } catch (_) {
+      return null;
     }
   }
 

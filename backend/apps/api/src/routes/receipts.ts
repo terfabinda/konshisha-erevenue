@@ -1,13 +1,14 @@
 import { FastifyInstance } from 'fastify'
-import { getSupabase } from '../lib/supabase'
+import { getSupabase, getServiceSupabase } from '../lib/supabase'
 import { requireAuth } from '../lib/auth'
 
 export async function registerReceiptRoutes(app: FastifyInstance) {
-  // Create-or-ignore a receipt (idempotent by client id)
+  // Create-or-ignore a receipt (idempotent by client id) — uses service_role to support both Supabase and Firebase UIDs
   app.post('/', async (request, reply) => {
     if (!(await requireAuth(request, reply))) return
     const b = request.body as Record<string, unknown>
-    const sb = getSupabase()
+    // Use service client to bypass RLS for Firebase UIDs and to allow offline-queue idempotency
+    const sb = getServiceSupabase()
     const { data, error } = await sb.rpc('upsert_receipt', {
       p_id: b.id,
       p_agency_id: b.agency_id,
@@ -30,12 +31,12 @@ export async function registerReceiptRoutes(app: FastifyInstance) {
     return reply.code(201).send(data)
   })
 
-  // Sync: bulk idempotent uplink from offline queue
+  // Sync: bulk idempotent uplink from offline queue — service_role so Firebase UIDs work
   app.post('/sync', async (request, reply) => {
     if (!(await requireAuth(request, reply))) return
     const { rows } = request.body as { rows: unknown[] }
     if (!Array.isArray(rows)) return reply.code(400).send({ error: 'rows must be an array' })
-    const sb = getSupabase()
+    const sb = getServiceSupabase()
     const { data, error } = await sb.rpc('sync_receipts', { p_rows: rows })
     if (error) return reply.code(400).send({ error: error.message })
     return reply.send({ results: data, total: rows.length })

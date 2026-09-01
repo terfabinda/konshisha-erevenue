@@ -42,7 +42,21 @@ void main() async {
   await AuthService.upgradeLegacyDemoSession();
   await SecurityConfigService.initialize();
   ReceiptService.initAutoSync();
+  // Wire the sync token provider to the current Supabase or Firebase session
+  SyncService.instance.tokenProvider = () async {
+    try {
+      final supaToken = Supabase.instance.client.auth.currentSession?.accessToken;
+      if (supaToken != null && supaToken.isNotEmpty) return supaToken;
+    } catch (_) {}
+    try {
+      final fbUser = FirebaseAuth.instance.currentUser;
+      if (fbUser != null) return await fbUser.getIdToken();
+    } catch (_) {}
+    return null;
+  };
   AutoSyncService.instance.start();
+  // Also flush any pending login logs
+  CloudLoginLogger.flushQueue();
   runApp(const ERevenueApp());
 }
 

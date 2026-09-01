@@ -93,20 +93,49 @@ class _PrintReceiptsScreenState extends State<PrintReceiptsScreen> {
 
   Future<void> _syncPending() async {
     setState(() => _isSyncing = true);
-    final synced = await ReceiptService.syncPendingReceipts();
-    _pendingCount = await ReceiptService.getPendingReceiptCount();
-    setState(() => _isSyncing = false);
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(synced > 0
-              ? 'Synced $synced receipt(s) successfully'
-              : 'No pending receipts to sync'),
-          backgroundColor: synced > 0 ? Colors.green : Colors.blueGrey,
-        ),
-      );
+    try {
+      final before = await ReceiptService.getPendingReceiptCount();
+      if (before == 0) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('No pending receipts to sync'), backgroundColor: Colors.blueGrey),
+          );
+        }
+        return;
+      }
+      final synced = await ReceiptService.syncPendingReceipts();
+      _pendingCount = await ReceiptService.getPendingReceiptCount();
+      if (mounted) {
+        if (synced > 0) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Synced $synced receipt(s) successfully'), backgroundColor: Colors.green),
+          );
+        } else if (_pendingCount > 0) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Unable to sync right now. Your receipt is saved locally and will upload automatically.'),
+              backgroundColor: Colors.orange,
+              duration: Duration(seconds: 4),
+            ),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('No pending receipts to sync'), backgroundColor: Colors.blueGrey),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.toString().replaceFirst('Exception: ', '')), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isSyncing = false);
+      await _loadData();
+      _pendingCount = await ReceiptService.getPendingReceiptCount();
+      if (mounted) setState(() {});
     }
-    await _loadData();
   }
 
   void _showAddReceiptDialog() {
