@@ -31,6 +31,15 @@ class ReceiptService {
 
   static Future<void> addReceipt(Receipt receipt) async {
     await _saveToPending(receipt);
+    // Attempt immediate sync if online; this triggers AutoSyncService connectivity listener too
+    try {
+      final connectivityResult = await Connectivity().checkConnectivity();
+      final isOnline = connectivityResult.isNotEmpty &&
+          connectivityResult.any((r) => r != ConnectivityResult.none);
+      if (isOnline) {
+        await syncPendingReceipts();
+      }
+    } catch (_) {}
   }
 
   static Map<String, dynamic> _toSupabaseMap(Map<String, dynamic> data) {
