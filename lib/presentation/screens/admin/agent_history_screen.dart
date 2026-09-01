@@ -1,8 +1,11 @@
+// ignore_for_file: use_build_context_synchronously
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
 import '../../../data/models/receipt.dart';
 import '../../../core/models/print_log.dart';
+import '../../../core/services/receipt_history_service.dart';
+import '../../../core/services/print_history_service.dart';
+import '../../../core/utils/friendly_error.dart';
 import '../../widgets/receipt_list_tile.dart';
 import '../../widgets/print_log_tile.dart';
 import '../receipt_detail_screen.dart';
@@ -44,7 +47,7 @@ class _AgentHistoryScreenState extends State<AgentHistoryScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(widget.agentName, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-              Text('Receipt & Print History', style: TextStyle(fontSize: 12, color: Colors.white70)),
+              const Text('Receipt & Print History', style: TextStyle(fontSize: 12, color: Colors.white70)),
             ],
           ),
           actions: [
@@ -96,30 +99,27 @@ class _AgentHistoryScreenState extends State<AgentHistoryScreen> {
   }
 
   Widget _buildReceiptsTab() {
-    Query query = FirebaseFirestore.instance
-        .collection('receipts')
-        .where('createdBy', isEqualTo: widget.agentId)
-        .orderBy('createdAt', descending: true);
-    if (_startDate != null) query = query.where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(_startDate!));
-    if (_endDate != null) query = query.where('createdAt', isLessThanOrEqualTo: Timestamp.fromDate(_endDate!));
-
-    return StreamBuilder<QuerySnapshot>(
-      stream: query.snapshots(),
+    return StreamBuilder<List<Receipt>>(
+      stream: ReceiptHistoryService.streamHistory(
+        createdById: widget.agentId,
+        startDate: _startDate,
+        endDate: _endDate,
+      ),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());
         }
         if (snapshot.hasError) {
-          return Center(child: Text('Error: ${snapshot.error}'));
+          return Center(child: Text(friendlyError(snapshot.error!)));
         }
-        final docs = snapshot.data?.docs ?? [];
+        final docs = snapshot.data ?? [];
         if (docs.isEmpty) {
           return const Center(child: Text('No receipts found'));
         }
 
         double total = 0;
-        for (final doc in docs) {
-          total += (doc.data() as Map<String, dynamic>)['amount']?.toDouble() ?? 0;
+        for (final receipt in docs) {
+          total += receipt.effectiveTotal;
         }
 
         return Column(
@@ -138,8 +138,7 @@ class _AgentHistoryScreenState extends State<AgentHistoryScreen> {
               child: ListView.builder(
                 itemCount: docs.length,
                 itemBuilder: (context, index) {
-                  final doc = docs[index];
-                  final receipt = Receipt.fromFirestore(doc.id, doc.data() as Map<String, dynamic>);
+                  final receipt = docs[index];
                   return ReceiptListTile(
                     receipt: receipt,
                     categoryName: receipt.categoryId,
@@ -163,34 +162,30 @@ class _AgentHistoryScreenState extends State<AgentHistoryScreen> {
   }
 
   Widget _buildPrintLogsTab() {
-    Query query = FirebaseFirestore.instance
-        .collection('printLogs')
-        .where('printedBy', isEqualTo: widget.agentId)
-        .orderBy('printedAt', descending: true);
-    if (_startDate != null) query = query.where('printedAt', isGreaterThanOrEqualTo: Timestamp.fromDate(_startDate!));
-    if (_endDate != null) query = query.where('printedAt', isLessThanOrEqualTo: Timestamp.fromDate(_endDate!));
-
-    return StreamBuilder<QuerySnapshot>(
-      stream: query.snapshots(),
+    return StreamBuilder<List<PrintLog>>(
+      stream: PrintHistoryService.watchPrintHistory(
+        printedBy: widget.agentId,
+        startDate: _startDate,
+        endDate: _endDate,
+      ),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());
         }
         if (snapshot.hasError) {
-          return Center(child: Text('Error: ${snapshot.error}'));
+          return Center(child: Text(friendlyError(snapshot.error!)));
         }
-        final docs = snapshot.data?.docs ?? [];
+        final docs = snapshot.data ?? [];
         if (docs.isEmpty) {
           return const Center(child: Text('No print logs found'));
         }
 
         int successCount = 0;
         int totalCopies = 0;
-        for (final doc in docs) {
-          final data = doc.data() as Map<String, dynamic>;
-          if (data['success'] == true) {
+        for (final log in docs) {
+          if (log.success) {
             successCount++;
-            totalCopies += data['copies'] as int? ?? 1;
+            totalCopies += log.copies;
           }
         }
 
@@ -212,8 +207,7 @@ class _AgentHistoryScreenState extends State<AgentHistoryScreen> {
               child: ListView.builder(
                 itemCount: docs.length,
                 itemBuilder: (context, index) {
-                  final doc = docs[index];
-                  final log = PrintLog.fromFirestore(doc.id, doc.data() as Map<String, dynamic>);
+                  final log = docs[index];
                   return PrintLogTile(
                     log: log,
                     onTap: () => Navigator.push(

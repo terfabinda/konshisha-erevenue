@@ -152,4 +152,47 @@ class Receipt {
     createdAt: data['createdAt'] != null ? (data['createdAt'] as Timestamp).toDate() : DateTime.now(),
     updatedAt: data['updatedAt'] != null ? (data['updatedAt'] as Timestamp).toDate() : null,
   );
+
+  factory Receipt.fromSupabase(Map<String, dynamic> data) => Receipt(
+    id: data['id'] as String? ?? '',
+    agencyId: data['agency_id'] as String? ?? '',
+    createdBy: data['created_by'] as String? ?? '',
+    payerName: data['payer_name'] as String? ?? 'Unknown',
+    payerPhone: data['payer_phone'] as String?,
+    payerTIN: data['payer_tin'] as String?,
+    payerAddress: data['payer_address'] as String?,
+    categoryId: data['category_id'] as String? ?? '',
+    description: data['description'] as String? ?? data['category_name'] as String? ?? '',
+    amount: (data['amount'] as num?)?.toDouble() ?? 0.0,
+    discount: (data['discount'] as num?)?.toDouble(),
+    penalty: (data['penalty'] as num?)?.toDouble(),
+    totalAmount: (data['total_amount'] as num?)?.toDouble() ?? 0.0,
+    quantity: data['quantity'] as int? ?? 1,
+    status: data['status'] as String? ?? 'active',
+    voidedBy: data['voided_by'] as String?,
+    voidedAt: data['voided_at'] != null ? DateTime.tryParse(data['voided_at'] as String) : null,
+    notes: data['notes'] as String?,
+    deviceFingerprint: data['device_fingerprint'] as String? ?? '',
+    createdAt: data['created_at'] != null ? DateTime.tryParse(data['created_at'] as String) ?? DateTime.now() : DateTime.now(),
+    updatedAt: data['updated_at'] != null ? DateTime.tryParse(data['updated_at'] as String) : null,
+  );
+
+  Map<String, dynamic> toSupabase() => {
+    'id': id,
+    'agency_id': agencyId,
+    'created_by': createdBy,
+    'payer_name': payerName,
+    'payer_phone': payerPhone,
+    'payer_tin': payerTIN,
+    'payer_address': payerAddress,
+    'category_id': categoryId.isEmpty ? null : categoryId,
+    'description': description,
+    'amount': amount,
+    'discount': discount,
+    'penalty': penalty,
+    'quantity': quantity,
+    'status': status,
+    'notes': notes,
+    'device_fingerprint': deviceFingerprint,
+  };
 }

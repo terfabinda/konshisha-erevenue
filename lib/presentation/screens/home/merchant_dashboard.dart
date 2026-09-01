@@ -1,6 +1,8 @@
+// ignore_for_file: unused_field, deprecated_member_use, use_build_context_synchronously
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'pay_bills_screen.dart';
 import 'print_receipts_screen.dart';
 import 'account_history_screen.dart';
@@ -9,7 +11,9 @@ import 'settings_screen.dart';
 import 'notifications_screen.dart';
 import 'merchant_profile_screen.dart';
 import '../../../core/services/auth_service.dart';
+import '../../../core/services/agency_service.dart';
 import '../../../core/models/user_account.dart';
+import '../../../core/utils/friendly_error.dart';
 import '../../../data/models/merchant_profile.dart';
 import '../../../data/models/merchant_profile_service.dart';
 import '../../../data/models/receipt_service.dart';
@@ -85,6 +89,11 @@ class _MerchantDashboardState extends State<MerchantDashboard> with WidgetsBindi
       }
     } catch (e) {
       if (mounted) setState(() => _isLoading = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(friendlyError(e)), backgroundColor: Colors.red),
+        );
+      }
     }
   }
 
@@ -94,47 +103,97 @@ class _MerchantDashboardState extends State<MerchantDashboard> with WidgetsBindi
       final agencyId = user?.agencyId;
 
       if (agencyId != null) {
-        // Scoped admin: stats only cover their own agency.
-        final agencyDoc = await FirebaseFirestore.instance.collection('agencies').doc(agencyId).get();
-        final agentsSnap = await FirebaseFirestore.instance
-            .collection('users')
-            .where('role', isEqualTo: 'agent')
-            .where('agencyId', isEqualTo: agencyId)
-            .count()
-            .get();
-        final allRevenue = await ReceiptService.getTotalRevenue();
-        final receiptsSnap = await FirebaseFirestore.instance
-            .collection('receipts')
-            .where('agencyId', isEqualTo: agencyId)
-            .count()
-            .get();
+        // Scoped admin: stats only cover their own agency - Supabase primary via AgencyService.
+        try {
+          final agency = await AgencyService.getAgencyById(agencyId);
+          final agentCount = await AgencyService.getAgencyAgentCount(agencyId);
+          final allRevenue = await ReceiptService.getTotalRevenue();
+          final receiptCount = await AgencyService.getAgencyReceiptCount(agencyId);
+          if (mounted) {
+            setState(() {
+              _totalAgencies = agency != null ? 1 : 0;
+              _totalAgents = agentCount;
+              _totalRevenue = allRevenue;
+              _totalReceipts = receiptCount;
+            });
+          }
+          return;
+        } catch (_) {
+          // Fallback to Firestore direct if Supabase path failed inside service
+          final agencyDoc = await FirebaseFirestore.instance.collection('agencies').doc(agencyId).get();
+          final agentsSnap = await FirebaseFirestore.instance
+              .collection('users')
+              .where('role', isEqualTo: 'agent')
+              .where('agencyId', isEqualTo: agencyId)
+              .count()
+              .get();
+          final allRevenue = await ReceiptService.getTotalRevenue();
+          final receiptsSnap = await FirebaseFirestore.instance
+              .collection('receipts')
+              .where('agencyId', isEqualTo: agencyId)
+              .count()
+              .get();
 
-        if (mounted) {
-          setState(() {
-            _totalAgencies = agencyDoc.exists ? 1 : 0;
-            _totalAgents = agentsSnap.count ?? 0;
-            _totalRevenue = allRevenue;
-            _totalReceipts = receiptsSnap.count ?? 0;
-          });
+          if (mounted) {
+            setState(() {
+              _totalAgencies = agencyDoc.exists ? 1 : 0;
+              _totalAgents = agentsSnap.count ?? 0;
+              _totalRevenue = allRevenue;
+              _totalReceipts = receiptsSnap.count ?? 0;
+            });
+          }
+          return;
         }
       } else {
-        // Super-admin: see across all agencies.
-        final agenciesSnap = await FirebaseFirestore.instance.collection('agencies').where('isActive', isEqualTo: true).count().get();
-        final agentsSnap = await FirebaseFirestore.instance.collection('users').where('role', isEqualTo: 'agent').count().get();
-        final allRevenue = await ReceiptService.getTotalRevenue();
-        final allReceiptsSnap = await FirebaseFirestore.instance.collection('receipts').count().get();
+        // Super-admin: see across all agencies - Supabase primary.
+        try {
+          final agencies = await AgencyService.getAllAgencies();
+          int agentCount;
+          try {
+            final res = await Supabase.instance.client.from('profiles').select('id').eq('role', 'agent').count();
+            agentCount = res.count;
+          } catch (_) {
+            final List<dynamic> rows = await Supabase.instance.client.from('profiles').select('id').eq('role', 'agent');
+            agentCount = rows.length;
+          }
+          final allRevenue = await ReceiptService.getTotalRevenue();
+          int receiptCount;
+          try {
+            final res = await Supabase.instance.client.from('receipts').select('id').count();
+            receiptCount = res.count;
+          } catch (_) {
+            final List<dynamic> rows = await Supabase.instance.client.from('receipts').select('id');
+            receiptCount = rows.length;
+          }
 
-        if (mounted) {
-          setState(() {
-            _totalAgencies = agenciesSnap.count ?? 0;
-            _totalAgents = agentsSnap.count ?? 0;
-            _totalRevenue = allRevenue;
-            _totalReceipts = allReceiptsSnap.count ?? 0;
-          });
+          if (mounted) {
+            setState(() {
+              _totalAgencies = agencies.length;
+              _totalAgents = agentCount;
+              _totalRevenue = allRevenue;
+              _totalReceipts = receiptCount;
+            });
+          }
+          return;
+        } catch (_) {
+          final agenciesSnap = await FirebaseFirestore.instance.collection('agencies').where('isActive', isEqualTo: true).count().get();
+          final agentsSnap = await FirebaseFirestore.instance.collection('users').where('role', isEqualTo: 'agent').count().get();
+          final allRevenue = await ReceiptService.getTotalRevenue();
+          final allReceiptsSnap = await FirebaseFirestore.instance.collection('receipts').count().get();
+
+          if (mounted) {
+            setState(() {
+              _totalAgencies = agenciesSnap.count ?? 0;
+              _totalAgents = agentsSnap.count ?? 0;
+              _totalRevenue = allRevenue;
+              _totalReceipts = allReceiptsSnap.count ?? 0;
+            });
+          }
+          return;
         }
       }
     } catch (e) {
-      debugPrint('Error loading admin stats: $e');
+      debugPrint(friendlyError(e));
     }
   }
 

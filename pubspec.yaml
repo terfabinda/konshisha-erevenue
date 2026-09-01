@@ -52,6 +52,7 @@ dependencies:
 
   # Backend / Sync (Node.js API + Supabase)
   http: ^1.2.0
+  supabase_flutter: ^2.9.1
 
   # Printing
   blue_thermal_printer_plus: ^0.0.8

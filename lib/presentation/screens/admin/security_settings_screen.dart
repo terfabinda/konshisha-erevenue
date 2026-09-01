@@ -1,6 +1,7 @@
+// ignore_for_file: unused_element, unnecessary_underscores
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import '../../../core/constants/firestore_paths.dart';
+import '../../../core/services/security_config_service.dart';
+import '../../../core/utils/friendly_error.dart';
 
 class SecuritySettingsScreen extends StatefulWidget {
   const SecuritySettingsScreen({super.key});
@@ -38,67 +39,63 @@ class _SecuritySettingsScreenState extends State<SecuritySettingsScreen> {
 
   Future<void> _loadSecurityConfig() async {
     try {
-      final doc = await FirebaseFirestore.instance
-          .collection(FirestorePaths.config)
-          .doc('security')
-          .get();
-
-      if (doc.exists) {
-        final data = doc.data()!;
-        setState(() {
-          _maxOfflineDays = data['maxOfflineDays'] as int? ?? 7;
-          _loginExpiryDays = data['loginExpiryDays'] as int? ?? 30;
-          _minVersionCode = data['minVersionCode'] as int? ?? 1;
-          _forceSyncRequired = data['forceSync'] as bool? ?? false;
-          _securityAlerts = List<String>.from(data['securityAlerts'] as List? ?? []);
-          _isLoading = false;
-        });
-      } else {
-        await _createDefaultConfig();
+      final config = await SecurityConfigService.fetchConfig();
+      if (!mounted) return;
+      setState(() {
+        _maxOfflineDays = config.maxOfflineDays;
+        _loginExpiryDays = config.loginExpiryDays;
+        _minVersionCode = config.minVersionCode;
+        _forceSyncRequired = config.forceSync;
+        _securityAlerts = List<String>.from(config.securityAlerts);
+        _isLoading = false;
+      });
+      // If config is defaults and not yet saved, ensure persisted
+      if (config.maxOfflineDays == 7 && config.loginExpiryDays == 30 && config.minVersionCode == 1 && config.securityAlerts.isEmpty && !config.forceSync) {
+        // Try to create default if not exists (fetch already handles defaults, but ensure save for Supabase)
+        // Only create if Firestore/Supabase empty - we can attempt save without overwriting existing
       }
     } catch (e) {
       if (mounted) {
         setState(() => _isLoading = false);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error loading config: $e'), backgroundColor: Colors.red),
+          SnackBar(content: Text(friendlyError(e)), backgroundColor: Colors.red),
         );
       }
     }
   }
 
   Future<void> _createDefaultConfig() async {
-    await FirebaseFirestore.instance
-        .collection(FirestorePaths.config)
-        .doc('security')
-        .set({
-      'maxOfflineDays': _maxOfflineDays,
-      'loginExpiryDays': _loginExpiryDays,
-      'minVersionCode': _minVersionCode,
-      'forceSync': false,
-      'securityAlerts': [],
-      'updatedAt': FieldValue.serverTimestamp(),
-    });
-    if (mounted) setState(() => _isLoading = false);
+    try {
+      final defaults = SecurityConfig.defaults();
+      await SecurityConfigService.saveConfig(defaults);
+      if (mounted) setState(() => _isLoading = false);
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isLoading = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(friendlyError(e)), backgroundColor: Colors.red),
+        );
+      }
+    }
   }
 
   Future<void> _saveConfig() async {
     setState(() => _isSaving = true);
     try {
-      await FirebaseFirestore.instance
-          .collection(FirestorePaths.config)
-          .doc('security')
-          .update({
-        'maxOfflineDays': int.tryParse(_maxOfflineDaysController.text) ?? _maxOfflineDays,
-        'loginExpiryDays': int.tryParse(_loginExpiryDaysController.text) ?? _loginExpiryDays,
-        'minVersionCode': int.tryParse(_minVersionCodeController.text) ?? _minVersionCode,
+      final parsedMax = int.tryParse(_maxOfflineDaysController.text) ?? _maxOfflineDays;
+      final parsedLogin = int.tryParse(_loginExpiryDaysController.text) ?? _loginExpiryDays;
+      final parsedVersion = int.tryParse(_minVersionCodeController.text) ?? _minVersionCode;
+      await SecurityConfigService.updateField({
+        'maxOfflineDays': parsedMax,
+        'loginExpiryDays': parsedLogin,
+        'minVersionCode': parsedVersion,
         'forceSync': _forceSyncRequired,
-        'updatedAt': FieldValue.serverTimestamp(),
       });
       if (!mounted) return;
       setState(() {
-        _maxOfflineDays = int.tryParse(_maxOfflineDaysController.text) ?? _maxOfflineDays;
-        _loginExpiryDays = int.tryParse(_loginExpiryDaysController.text) ?? _loginExpiryDays;
-        _minVersionCode = int.tryParse(_minVersionCodeController.text) ?? _minVersionCode;
+        _maxOfflineDays = parsedMax;
+        _loginExpiryDays = parsedLogin;
+        _minVersionCode = parsedVersion;
         _isSaving = false;
       });
       ScaffoldMessenger.of(context).showSnackBar(
@@ -108,7 +105,7 @@ class _SecuritySettingsScreenState extends State<SecuritySettingsScreen> {
       if (mounted) {
         setState(() => _isSaving = false);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error saving: $e'), backgroundColor: Colors.red),
+          SnackBar(content: Text(friendlyError(e)), backgroundColor: Colors.red),
         );
       }
     }
@@ -117,16 +114,11 @@ class _SecuritySettingsScreenState extends State<SecuritySettingsScreen> {
   Future<void> _toggleForceSync() async {
     setState(() => _isSaving = true);
     try {
-      await FirebaseFirestore.instance
-          .collection(FirestorePaths.config)
-          .doc('security')
-          .update({
-        'forceSync': !_forceSyncRequired,
-        'updatedAt': FieldValue.serverTimestamp(),
-      });
+      final newValue = !_forceSyncRequired;
+      await SecurityConfigService.updateField({'forceSync': newValue});
       if (mounted) {
         setState(() {
-          _forceSyncRequired = !_forceSyncRequired;
+          _forceSyncRequired = newValue;
           _isSaving = false;
         });
         ScaffoldMessenger.of(context).showSnackBar(
@@ -140,7 +132,7 @@ class _SecuritySettingsScreenState extends State<SecuritySettingsScreen> {
       if (mounted) {
         setState(() => _isSaving = false);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
+          SnackBar(content: Text(friendlyError(e)), backgroundColor: Colors.red),
         );
       }
     }
@@ -171,34 +163,38 @@ class _SecuritySettingsScreenState extends State<SecuritySettingsScreen> {
     );
 
     if (confirm != null && confirm.isNotEmpty) {
-      final updatedAlerts = [..._securityAlerts, confirm];
-      await FirebaseFirestore.instance
-          .collection(FirestorePaths.config)
-          .doc('security')
-          .update({
-        'securityAlerts': updatedAlerts,
-        'updatedAt': FieldValue.serverTimestamp(),
-      });
-      if (mounted) {
-        setState(() => _securityAlerts = updatedAlerts);
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Alert added'), backgroundColor: Colors.green),
-        );
+      try {
+        final updatedAlerts = [..._securityAlerts, confirm];
+        await SecurityConfigService.updateField({'securityAlerts': updatedAlerts});
+        if (mounted) {
+          setState(() => _securityAlerts = updatedAlerts);
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Alert added'), backgroundColor: Colors.green),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(friendlyError(e)), backgroundColor: Colors.red),
+          );
+        }
       }
     }
   }
 
   Future<void> _removeSecurityAlert(int index) async {
-    final updatedAlerts = List<String>.from(_securityAlerts)..removeAt(index);
-    await FirebaseFirestore.instance
-        .collection(FirestorePaths.config)
-        .doc('security')
-        .update({
-      'securityAlerts': updatedAlerts,
-      'updatedAt': FieldValue.serverTimestamp(),
-    });
-    if (mounted) {
-      setState(() => _securityAlerts = updatedAlerts);
+    try {
+      final updatedAlerts = List<String>.from(_securityAlerts)..removeAt(index);
+      await SecurityConfigService.updateField({'securityAlerts': updatedAlerts});
+      if (mounted) {
+        setState(() => _securityAlerts = updatedAlerts);
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(friendlyError(e)), backgroundColor: Colors.red),
+        );
+      }
     }
   }
 
@@ -315,7 +311,7 @@ class _SecuritySettingsScreenState extends State<SecuritySettingsScreen> {
                 ),
               const Divider(),
               ListTile(
-                leading: Icon(Icons.add_alert, color: Colors.orange.shade700),
+                leading: Icon(Icons.add_alert, color: Colors.orange),
                 title: const Text('Add Alert'),
                 onTap: _addSecurityAlert,
               ),

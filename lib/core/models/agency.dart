@@ -101,6 +101,53 @@ class Agency {
     customSettings: data['customSettings'] as Map<String, dynamic>?,
     isActive: data['isActive'] as bool? ?? true,
     onboardedBy: data['onboardedBy'] as String? ?? '',
-    onboardedAt: data['onboardedAt'] != null ? (data['onboardedAt'] as Timestamp).toDate() : null,
+    onboardedAt: data['onboardedAt'] != null ? (data['onboardedAt'] as Timestamp).toDate() : DateTime.now(),
   );
+
+  Map<String, dynamic> toSupabase() => {
+    'id': id,
+    'name': name,
+    'code': code,
+    'address': address,
+    'phone': phone,
+    'email': email,
+    'tin': tin,
+    'admin_name': adminName,
+    'admin_phone': adminPhone,
+    'receipt_prefix': receiptPrefix,
+    'next_receipt_number': nextReceiptNumber,
+    'custom_settings': customSettings,
+    'is_active': isActive,
+    'onboarded_by': onboardedBy.isEmpty ? null : onboardedBy,
+    'onboarded_at': onboardedAt.toIso8601String(),
+  };
+
+  factory Agency.fromSupabase(Map<String, dynamic> data) {
+    dynamic onboardedRaw = data['onboarded_at'] ?? data['onboardedAt'];
+    DateTime onboardedAt;
+    if (onboardedRaw is String) {
+      onboardedAt = DateTime.tryParse(onboardedRaw) ?? DateTime.now();
+    } else if (onboardedRaw is DateTime) {
+      onboardedAt = onboardedRaw;
+    } else {
+      onboardedAt = DateTime.now();
+    }
+    return Agency(
+      id: data['id'] as String? ?? '',
+      name: data['name'] as String? ?? '',
+      code: data['code'] as String? ?? '',
+      address: data['address'] as String?,
+      phone: data['phone'] as String?,
+      email: data['email'] as String?,
+      tin: data['tin'] as String?,
+      adminName: data['admin_name'] as String? ?? data['adminName'] as String? ?? '',
+      adminPhone: data['admin_phone'] as String? ?? data['adminPhone'] as String? ?? '',
+      receiptPrefix: (data['receipt_prefix'] as int?) ?? (data['receiptPrefix'] as int?) ?? 1000,
+      nextReceiptNumber: (data['next_receipt_number'] as int?) ?? (data['nextReceiptNumber'] as int?) ?? 1,
+      customSettings: data['custom_settings'] as Map<String, dynamic>? ?? data['customSettings'] as Map<String, dynamic>?,
+      isActive: data['is_active'] as bool? ?? data['isActive'] as bool? ?? true,
+      onboardedBy: data['onboarded_by'] as String? ?? data['onboardedBy'] as String? ?? '',
+      onboardedAt: onboardedAt,
+    );
+  }
 }

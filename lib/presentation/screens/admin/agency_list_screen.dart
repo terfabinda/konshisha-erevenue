@@ -1,10 +1,10 @@
+// ignore_for_file: deprecated_member_use
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import '../../../core/constants/firestore_paths.dart';
 import '../../../core/models/agency.dart';
 import '../../../core/models/user_account.dart';
 import '../../../core/services/agency_service.dart';
 import '../../../core/services/auth_service.dart';
+import '../../../core/utils/friendly_error.dart';
 import 'agency_onboarding_screen.dart';
 import 'agent_management_screen.dart';
 
@@ -27,17 +27,34 @@ class _AgencyListScreenState extends State<AgencyListScreen> {
   }
 
   Future<void> _initLockedAgency() async {
-    final user = await AuthService.getCurrentUser();
-    if (user != null && user.role == UserRole.admin && user.agencyId != null) {
-      setState(() => _lockedAgencyId = user.agencyId);
+    try {
+      final user = await AuthService.getCurrentUser();
+      if (user != null && user.role == UserRole.admin && user.agencyId != null) {
+        if (mounted) setState(() => _lockedAgencyId = user.agencyId);
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(friendlyError(e)), backgroundColor: Colors.red),
+        );
+      }
     }
   }
 
   Future<void> _toggleAgency(String id, bool isActive) async {
-    if (isActive) {
-      await AgencyService.deactivateAgency(id);
-    } else {
-      await AgencyService.reactivateAgency(id);
+    try {
+      if (isActive) {
+        await AgencyService.deactivateAgency(id);
+      } else {
+        await AgencyService.reactivateAgency(id);
+      }
+      if (mounted) setState(() {});
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(friendlyError(e)), backgroundColor: Colors.red),
+        );
+      }
     }
   }
 
@@ -59,11 +76,19 @@ class _AgencyListScreenState extends State<AgencyListScreen> {
     );
 
     if (confirm == true) {
-      await FirebaseFirestore.instance.collection(FirestorePaths.agencies).doc(id).delete();
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Agency deleted')),
-      );
+      try {
+        await AgencyService.deleteAgency(id);
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Agency deleted')),
+        );
+        if (mounted) setState(() {});
+      } catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(friendlyError(e)), backgroundColor: Colors.red),
+        );
+      }
     }
   }
 
@@ -105,26 +130,22 @@ class _AgencyListScreenState extends State<AgencyListScreen> {
             ),
           ),
           Expanded(
-            child: StreamBuilder<QuerySnapshot>(
-              stream: FirebaseFirestore.instance
-                  .collection(FirestorePaths.agencies)
-                  .orderBy('onboardedAt', descending: true)
-                  .snapshots(),
+            child: StreamBuilder<List<Agency>>(
+              stream: AgencyService.streamAgencies(),
               builder: (context, snapshot) {
                 if (snapshot.connectionState == ConnectionState.waiting) {
                   return const Center(child: CircularProgressIndicator());
                 }
                 if (snapshot.hasError) {
-                  return Center(child: Text('Error: ${snapshot.error}'));
+                  return Center(child: Text(friendlyError(snapshot.error!)));
                 }
 
-                final agencies = snapshot.data?.docs ?? [];
-                final filtered = agencies.where((doc) {
-                  if (_lockedAgencyId != null && doc.id != _lockedAgencyId) return false;
-                  final data = doc.data() as Map<String, dynamic>;
-                  final name = (data['name'] as String? ?? '').toLowerCase();
-                  final code = (data['code'] as String? ?? '').toLowerCase();
-                  final isActive = data['isActive'] as bool? ?? true;
+                final agencies = snapshot.data ?? [];
+                final filtered = agencies.where((agency) {
+                  if (_lockedAgencyId != null && agency.id != _lockedAgencyId) return false;
+                  final name = agency.name.toLowerCase();
+                  final code = agency.code.toLowerCase();
+                  final isActive = agency.isActive;
                   final matchesSearch = _searchQuery.isEmpty ||
                       name.contains(_searchQuery) ||
                       code.contains(_searchQuery);
@@ -166,8 +187,7 @@ class _AgencyListScreenState extends State<AgencyListScreen> {
                 return ListView.builder(
                   itemCount: filtered.length,
                   itemBuilder: (context, index) {
-                    final doc = filtered[index];
-                    final agency = Agency.fromFirestore(doc.id, doc.data() as Map<String, dynamic>);
+                    final agency = filtered[index];
                     return _AgencyListTile(
                       agency: agency,
                       onToggle: () => _toggleAgency(agency.id, agency.isActive),
@@ -327,7 +347,7 @@ class _AgencyListTile extends StatelessWidget {
                     Switch(
                       value: agency.isActive,
                       onChanged: (_) => onToggle(),
-                      activeColor: Colors.green,
+                      activeThumbColor: Colors.green,
                     ),
                   ],
                 ),

@@ -71,4 +71,25 @@ class UserAccount {
     createdAt: (data['createdAt'] as dynamic).toDate() as DateTime,
     lastLoginAt: data['lastLoginAt'] != null ? (data['lastLoginAt'] as dynamic).toDate() as DateTime : null,
   );
+
+  factory UserAccount.fromSupabase(String uid, Map<String, dynamic> data) {
+    DateTime? parseTimestamptz(dynamic v) {
+      if (v == null) return null;
+      if (v is String) return DateTime.tryParse(v);
+      return null;
+    }
+    return UserAccount(
+      uid: uid,
+      username: data['username'] as String? ?? data['email'] as String? ?? '',
+      displayName: data['display_name'] as String? ?? data['displayName'] as String? ?? '',
+      role: data['role'] == 'admin' ? UserRole.admin : UserRole.agent,
+      agencyId: data['agency_id'] as String? ?? data['agencyId'] as String?,
+      boundDeviceFingerprint: data['bound_device_fingerprint'] as String? ?? data['boundDeviceFingerprint'] as String?,
+      maxOfflineDays: (data['max_offline_days'] as int?) ?? (data['maxOfflineDays'] as int?) ?? 7,
+      loginExpiryAt: parseTimestamptz(data['login_expiry_at'] ?? data['loginExpiryAt']),
+      isActive: data['is_active'] as bool? ?? data['isActive'] as bool? ?? true,
+      createdAt: parseTimestamptz(data['created_at'] ?? data['createdAt']) ?? DateTime.now(),
+      lastLoginAt: parseTimestamptz(data['last_login_at'] ?? data['lastLoginAt']),
+    );
+  }
 }

@@ -1,8 +1,9 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import '../../../core/constants/firestore_paths.dart';
+import 'package:http/http.dart' as http;
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/models/agency.dart';
+import '../../../core/utils/friendly_error.dart';
 import '../../../core/services/agency_service.dart';
 import 'agent_history_screen.dart';
 
@@ -40,26 +41,17 @@ class _AgentManagementScreenState extends State<AgentManagementScreen> {
   }) async {
     setState(() => _isLoading = true);
     try {
-      final userCredential = await FirebaseAuth.instance.createUserWithEmailAndPassword(
+      // Use Supabase via Node API (service_role) — works for both Firebase and Supabase agents.
+      // This creates the auth user + profile in Supabase and is the source of truth going forward.
+      final res = await _createAgentViaApi(
         email: email.trim(),
         password: password,
+        displayName: name.trim(),
+        agencyId: agencyId,
+        maxOfflineDays: maxOfflineDays,
+        expiryDays: expiryDays,
       );
-
-      await FirebaseFirestore.instance.collection(FirestorePaths.users).doc(userCredential.user!.uid).set({
-        'uid': userCredential.user!.uid,
-        'email': email.trim(),
-        'username': email.trim(),
-        'displayName': name.trim(),
-        'role': 'agent',
-        'agencyId': agencyId,
-        'agencyName': agencyName,
-        'maxOfflineDays': maxOfflineDays,
-        'expiryDays': expiryDays,
-        'loginExpiryAt': Timestamp.fromDate(DateTime.now().add(Duration(days: expiryDays))),
-        'isActive': true,
-        'mustChangePassword': true,
-        'createdAt': FieldValue.serverTimestamp(),
-      });
+      if (!res.success) throw Exception(res.errorMessage);
 
       if (!mounted) return;
       Navigator.pop(context);
@@ -69,34 +61,48 @@ class _AgentManagementScreenState extends State<AgentManagementScreen> {
           backgroundColor: Colors.green,
         ),
       );
-    } on FirebaseAuthException catch (e) {
-      String message = 'Error creating agent';
-      if (e.code == 'email-already-in-use') message = 'Email already exists';
-      if (e.code == 'weak-password') message = 'Password too weak (min 6 chars)';
-      if (e.code == 'invalid-email') message = 'Invalid email format';
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(message), backgroundColor: Colors.red),
-      );
-    } on FirebaseException catch (e) {
-      if (e.code == 'permission-denied') {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Permission denied. Your admin account may be missing the required role. Contact support to verify your account setup in Firebase Console.'),
-            backgroundColor: Colors.red,
-            duration: Duration(seconds: 5),
-          ),
-        );
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Firestore error: ${e.message}'), backgroundColor: Colors.red),
-        );
-      }
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
+        SnackBar(content: Text(friendlyError(e)), backgroundColor: Colors.red),
       );
     } finally {
       if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  Future<({bool success, String? errorMessage})> _createAgentViaApi({
+    required String email,
+    required String password,
+    required String displayName,
+    required String agencyId,
+    required int maxOfflineDays,
+    required int expiryDays,
+  }) async {
+    try {
+      final uri = Uri.parse('https://konshisha-erevenue.vercel.app/api/agents');
+      String? token;
+      try {
+        token = Supabase.instance.client.auth.currentSession?.accessToken;
+      } catch (_) {}
+      final headers = <String, String>{'Content-Type': 'application/json'};
+      if (token != null && token.isNotEmpty) headers['Authorization'] = 'Bearer $token';
+      final resp = await http.post(uri, headers: headers, body: jsonEncode({
+        'email': email,
+        'password': password,
+        'display_name': displayName,
+        'agency_id': agencyId,
+        'max_offline_days': maxOfflineDays,
+        'expiry_days': expiryDays,
+      }));
+      if (resp.statusCode == 201 || resp.statusCode == 200) return (success: true, errorMessage: null);
+      String msg = 'Failed to create agent (${resp.statusCode})';
+      try {
+        final body = jsonDecode(resp.body) as Map<String, dynamic>;
+        if (body['error'] is String) msg = body['error'] as String;
+      } catch (_) {}
+      return (success: false, errorMessage: msg);
+    } catch (e) {
+      return (success: false, errorMessage: friendlyError(e));
     }
   }
 
@@ -231,18 +237,41 @@ class _AgentManagementScreenState extends State<AgentManagementScreen> {
   }
 
   Future<void> _toggleAgentActive(String uid, bool currentStatus) async {
-    await FirebaseFirestore.instance.collection(FirestorePaths.users).doc(uid).update({'isActive': !currentStatus});
+    try {
+      final token = Supabase.instance.client.auth.currentSession?.accessToken;
+      final headers = <String, String>{'Content-Type': 'application/json'};
+      if (token != null) headers['Authorization'] = 'Bearer $token';
+      final resp = await http.patch(
+        Uri.parse('https://konshisha-erevenue.vercel.app/api/agents/$uid/active'),
+        headers: headers,
+        body: jsonEncode({'is_active': !currentStatus}),
+      );
+      if (resp.statusCode != 200) throw Exception(jsonDecode(resp.body)['error'] ?? 'Failed to toggle');
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(friendlyError(e)), backgroundColor: Colors.red));
+    }
   }
 
   Future<void> _resetDeviceBinding(String uid) async {
-    await FirebaseFirestore.instance
-        .collection(FirestorePaths.users)
-        .doc(uid)
-        .update({'boundDeviceFingerprint': FieldValue.delete()});
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Device binding reset. Agent can login on a new device.')),
-    );
+    try {
+      final token = Supabase.instance.client.auth.currentSession?.accessToken;
+      final headers = <String, String>{'Content-Type': 'application/json'};
+      if (token != null) headers['Authorization'] = 'Bearer $token';
+      final resp = await http.patch(
+        Uri.parse('https://konshisha-erevenue.vercel.app/api/agents/$uid/reset-device'),
+        headers: headers,
+        body: jsonEncode({}),
+      );
+      if (resp.statusCode != 200) throw Exception(jsonDecode(resp.body)['error'] ?? 'Failed to reset');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Device binding reset. Agent can login on a new device.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(friendlyError(e)), backgroundColor: Colors.red));
+    }
   }
 
   Future<void> _blockAgent(String uid, String name) async {
@@ -262,21 +291,41 @@ class _AgentManagementScreenState extends State<AgentManagementScreen> {
       ),
     );
     if (confirm == true) {
-      await FirebaseFirestore.instance.collection(FirestorePaths.users).doc(uid).update({'isActive': false});
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('$name has been blocked and deactivated'), backgroundColor: Colors.red),
-      );
+      try {
+        final token = Supabase.instance.client.auth.currentSession?.accessToken;
+        final headers = <String, String>{'Content-Type': 'application/json'};
+        if (token != null) headers['Authorization'] = 'Bearer $token';
+        final resp = await http.patch(
+          Uri.parse('https://konshisha-erevenue.vercel.app/api/agents/$uid/active'),
+          headers: headers,
+          body: jsonEncode({'is_active': false}),
+        );
+        if (resp.statusCode != 200) throw Exception(jsonDecode(resp.body)['error'] ?? 'Failed to block');
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('$name has been blocked and deactivated'), backgroundColor: Colors.red),
+        );
+      } catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(friendlyError(e)), backgroundColor: Colors.red));
+      }
     }
   }
 
-  Stream<QuerySnapshot> _getAgentsStream() {
-    // No orderBy — avoids needing a composite index. Sorting happens client-side.
-    final query = FirebaseFirestore.instance.collection(FirestorePaths.users).where('role', isEqualTo: 'agent');
-    if (_lockedAgencyId != null) {
-      return query.where('agencyId', isEqualTo: _lockedAgencyId).snapshots();
+  Future<List<Map<String, dynamic>>> _fetchAgents() async {
+    try {
+      final token = Supabase.instance.client.auth.currentSession?.accessToken;
+      final headers = <String, String>{'Content-Type': 'application/json'};
+      if (token != null) headers['Authorization'] = 'Bearer $token';
+      var uri = Uri.parse('https://konshisha-erevenue.vercel.app/api/agents');
+      if (_lockedAgencyId != null) uri = uri.replace(queryParameters: {'agency_id': _lockedAgencyId!});
+      final resp = await http.get(uri, headers: headers);
+      if (resp.statusCode != 200) throw Exception(jsonDecode(resp.body)['error'] ?? 'Failed to load agents');
+      final data = jsonDecode(resp.body) as List;
+      return data.cast<Map<String, dynamic>>();
+    } catch (e) {
+      throw Exception(friendlyError(e));
     }
-    return query.snapshots();
   }
 
   @override
@@ -302,22 +351,22 @@ class _AgentManagementScreenState extends State<AgentManagementScreen> {
           ),
         ],
       ),
-      body: StreamBuilder<QuerySnapshot>(
-        stream: _getAgentsStream(),
+      body: FutureBuilder<List<Map<String, dynamic>>>(
+        future: _fetchAgents(),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator());
           }
           if (snapshot.hasError) {
-            return Center(child: Text('Error: ${snapshot.error}'));
+            return Center(child: Text(friendlyError(snapshot.error!)));
           }
 
-          final agents = (snapshot.data?.docs ?? [])
+          final agents = (snapshot.data ?? [])
             ..sort((a, b) {
-              final aCreated = (a.data() as Map)['createdAt'];
-              final bCreated = (b.data() as Map)['createdAt'];
-              final aTime = aCreated is Timestamp ? aCreated.seconds : 0;
-              final bTime = bCreated is Timestamp ? bCreated.seconds : 0;
+              final aCreated = a['created_at'] as String?;
+              final bCreated = b['created_at'] as String?;
+              final aTime = aCreated != null ? DateTime.tryParse(aCreated)?.millisecondsSinceEpoch ?? 0 : 0;
+              final bTime = bCreated != null ? DateTime.tryParse(bCreated)?.millisecondsSinceEpoch ?? 0 : 0;
               return bTime.compareTo(aTime);
             });
           if (agents.isEmpty) {
@@ -339,19 +388,18 @@ class _AgentManagementScreenState extends State<AgentManagementScreen> {
             );
           }
 
-          _refreshAgentStats(agents.map((doc) => doc.id).toList());
+          _refreshAgentStats(agents.map((e) => e['id'] as String).toList());
 
           return ListView.builder(
             itemCount: agents.length,
             itemBuilder: (context, index) {
-              final doc = agents[index];
-              final uid = doc.id;
-              final data = doc.data() as Map<String, dynamic>;
-              final isActive = data['isActive'] as bool? ?? true;
-              final name = data['displayName'] as String? ?? 'Unknown';
+              final data = agents[index];
+              final uid = data['id'] as String;
+              final isActive = data['is_active'] as bool? ?? data['isActive'] as bool? ?? true;
+              final name = data['display_name'] as String? ?? data['displayName'] as String? ?? 'Unknown';
               final email = data['email'] as String? ?? data['username'] as String? ?? '';
-              final hasDevice = data['boundDeviceFingerprint'] != null;
-              final mustChangePassword = data['mustChangePassword'] as bool? ?? false;
+              final hasDevice = data['bound_device_fingerprint'] != null || data['boundDeviceFingerprint'] != null;
+              final mustChangePassword = data['must_change_password'] as bool? ?? data['mustChangePassword'] as bool? ?? false;
               final hasStats = _agentStats.containsKey(uid);
               final agentStats = _agentStats[uid] ?? {'receipts': 0, 'prints': 0};
 
@@ -528,17 +576,12 @@ class _AgentManagementScreenState extends State<AgentManagementScreen> {
         continue;
       }
       try {
-        final receiptsSnapshot = await FirebaseFirestore.instance
-            .collection('receipts')
-            .where('createdBy', isEqualTo: uid)
-            .get();
-        final printsSnapshot = await FirebaseFirestore.instance
-            .collection('printLogs')
-            .where('printedBy', isEqualTo: uid)
-            .get();
+        final supa = Supabase.instance.client;
+        final rCount = await supa.from('receipts').select('id').eq('created_by', uid).count();
+        final pCount = await supa.from('print_logs').select('id').eq('printed_by', uid).count();
         newStats[uid] = {
-          'receipts': receiptsSnapshot.docs.length,
-          'prints': printsSnapshot.docs.length,
+          'receipts': rCount.count,
+          'prints': pCount.count,
         };
       } catch (_) {
         newStats[uid] = {'receipts': 0, 'prints': 0};

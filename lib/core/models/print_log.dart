@@ -52,6 +52,27 @@ class PrintLog {
     );
   }
 
+  factory PrintLog.fromSupabase(Map<String, dynamic> data) {
+    return PrintLog(
+      id: data['id'] as String? ?? '',
+      receiptId: data['receipt_id'] as String? ?? '',
+      receiptRef: data['receipt_ref'] as String? ?? '',
+      printedAt: data['printed_at'] != null
+          ? DateTime.tryParse(data['printed_at'] as String) ?? DateTime.now()
+          : DateTime.now(),
+      copies: (data['copies'] as int?) ?? 1,
+      printMode: data['print_mode'] as String? ?? 'text',
+      printerName: data['printer_name'] as String?,
+      printerAddress: data['printer_address'] as String?,
+      printerModel: data['printer_model'] as String?,
+      success: data['success'] as bool? ?? true,
+      errorMessage: data['error_message'] as String?,
+      printedBy: data['printed_by'] as String? ?? '',
+      agencyId: data['agency_id'] as String?,
+      isReprint: data['is_reprint'] as bool? ?? false,
+    );
+  }
+
   Map<String, dynamic> toJson() {
     return {
       'receiptId': receiptId,
@@ -67,6 +88,25 @@ class PrintLog {
       'printedBy': printedBy,
       'agencyId': agencyId,
       'isReprint': isReprint,
+    };
+  }
+
+  Map<String, dynamic> toSupabase() {
+    return {
+      'id': id,
+      'receipt_id': receiptId,
+      'receipt_ref': receiptRef,
+      'printed_at': printedAt.toIso8601String(),
+      'copies': copies,
+      'print_mode': printMode,
+      'printer_name': printerName,
+      'printer_address': printerAddress,
+      'printer_model': printerModel,
+      'success': success,
+      'error_message': errorMessage,
+      'printed_by': printedBy,
+      'agency_id': agencyId,
+      'is_reprint': isReprint,
     };
   }
 }

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../../../core/models/agency.dart';
 import '../../../core/services/agency_service.dart';
 import '../../../core/services/auth_service.dart';
+import '../../../core/utils/friendly_error.dart';
 import '../../widgets/agency_form.dart';
 import '../../widgets/category_config_widget.dart';
 
@@ -50,7 +51,7 @@ class _AgencyOnboardingScreenState extends State<AgencyOnboardingScreen> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error: $e')),
+        SnackBar(content: Text(friendlyError(e)), backgroundColor: Colors.red),
       );
     } finally {
       setState(() => _isLoading = false);
