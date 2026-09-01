@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
-import { Receipt } from '@erevenue/shared'
+import { Agency, Receipt } from '@erevenue/shared'
 
 export default function Receipts() {
   const [receipts, setReceipts] = useState<Receipt[]>([])
@@ -8,6 +8,19 @@ export default function Receipts() {
   const [to, setTo] = useState('')
   const [status, setStatus] = useState('')
   const [agency, setAgency] = useState('')
+  const [agencies, setAgencies] = useState<Agency[]>([])
+  const [voidingId, setVoidingId] = useState('')
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    supabase
+      .from('agencies')
+      .select('id, name, code')
+      .order('name')
+      .then(({ data, error }) => {
+        if (!error) setAgencies((data as Agency[]) ?? [])
+      })
+  }, [])
 
   useEffect(() => {
     const load = async () => {
@@ -26,6 +39,19 @@ export default function Receipts() {
   const fmt = (n?: number | string | null) =>
     '₦' + Number(n ?? 0).toLocaleString('en-NG', { maximumFractionDigits: 2 })
 
+  const onVoid = async (r: Receipt) => {
+    if (!window.confirm(`Void receipt ${r.receipt_ref ?? r.id}? This cannot be undone.`)) return
+    setVoidingId(r.id)
+    setError('')
+    const { error } = await supabase.rpc('void_receipt', { p_receipt_id: r.id })
+    setVoidingId('')
+    if (error) {
+      setError(error.message)
+      return
+    }
+    setReceipts((prev) => prev.map((x) => (x.id === r.id ? { ...x, status: 'voided' as const } : x)))
+  }
+
   return (
     <div>
       <h2>Receipts</h2>
@@ -37,10 +63,23 @@ export default function Receipts() {
           <option value="active">Active</option>
           <option value="voided">Voided</option>
         </select>
-        <button className="btn secondary" onClick={() => { setFrom(''); setTo(''); setStatus(''); setAgency('') }}>
-          Reset
-        </button>
+        <select value={agency} onChange={(e) => setAgency(e.target.value)}>
+          <option value="">All agencies</option>
+          {agencies.map((a) => (
+            <option key={a.id} value={a.id}>
+              {a.code} — {a.name}
+            </option>
+          ))}
+        </select>
+        {from || to || status || agency ? (
+          <button className="btn secondary" onClick={() => { setFrom(''); setTo(''); setStatus(''); setAgency('') }}>
+            Reset
+          </button>
+        ) : null}
       </div>
+
+      {error && <div className="error">{error}</div>}
+
       <table>
         <thead>
           <tr>
@@ -53,6 +92,7 @@ export default function Receipts() {
             <th>Agent</th>
             <th>Status</th>
             <th>Date</th>
+            <th>Action</th>
           </tr>
         </thead>
         <tbody>
@@ -67,10 +107,23 @@ export default function Receipts() {
               <td>{r.created_by?.slice(0, 8)}</td>
               <td><span className={`badge ${r.status}`}>{r.status}</span></td>
               <td>{new Date(r.created_at).toLocaleString()}</td>
+              <td>
+                {r.status === 'active' ? (
+                  <button
+                    className="btn small danger"
+                    disabled={voidingId === r.id}
+                    onClick={() => onVoid(r)}
+                  >
+                    {voidingId === r.id ? 'Voiding…' : 'Void'}
+                  </button>
+                ) : (
+                  <span style={{ color: 'var(--muted)' }}>—</span>
+                )}
+              </td>
             </tr>
           ))}
           {receipts.length === 0 && (
-            <tr><td colSpan={9} style={{ textAlign: 'center', color: 'var(--muted)' }}>No receipts</td></tr>
+            <tr><td colSpan={10} style={{ textAlign: 'center', color: 'var(--muted)' }}>No receipts</td></tr>
           )}
         </tbody>
       </table>

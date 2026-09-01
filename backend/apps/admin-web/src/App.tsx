@@ -6,6 +6,10 @@ import Receipts from './pages/Receipts'
 import Agencies from './pages/Agencies'
 import Agents from './pages/Agents'
 import PrintLogs from './pages/PrintLogs'
+import Categories from './pages/Categories'
+import Notifications from './pages/Notifications'
+import Security from './pages/Security'
+import Bills from './pages/Bills'
 import Sidebar from './components/Sidebar'
 import Login from './pages/Login'
 
@@ -39,7 +43,7 @@ export default function App() {
       <div className="login-wrap">
         <h1>Missing configuration</h1>
         <p>
-          Set <code>VITE_SUPABASE_URL</code> and <code>VITE_SUPABASE_ANON_KEY</code> in{' '}
+          Set <code>VITE_SUPABASE_URL</code> and <code>VITE_SUPABASE_PUBLISHABLE_KEY</code> in{' '}
           <code>apps/admin-web/.env</code>, then restart.
         </p>
       </div>
@@ -66,6 +70,10 @@ export default function App() {
           <Route path="/agencies" element={<Agencies />} />
           <Route path="/agents" element={<Agents />} />
           <Route path="/prints" element={<PrintLogs />} />
+          <Route path="/categories" element={<Categories />} />
+          <Route path="/bills" element={<Bills />} />
+          <Route path="/notifications" element={<Notifications />} />
+          <Route path="/security" element={<Security />} />
           <Route path="*" element={<Dashboard />} />
         </Routes>
       </div>

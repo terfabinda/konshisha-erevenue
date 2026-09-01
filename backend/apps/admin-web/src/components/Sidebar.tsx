@@ -25,6 +25,18 @@ export default function Sidebar() {
         <NavLink to="/prints" className={({ isActive }) => (isActive ? active : '')}>
           Print Logs
         </NavLink>
+        <NavLink to="/categories" className={({ isActive }) => (isActive ? active : '')}>
+          Categories
+        </NavLink>
+        <NavLink to="/bills" className={({ isActive }) => (isActive ? active : '')}>
+          Bills
+        </NavLink>
+        <NavLink to="/notifications" className={({ isActive }) => (isActive ? active : '')}>
+          Notifications
+        </NavLink>
+        <NavLink to="/security" className={({ isActive }) => (isActive ? active : '')}>
+          Security
+        </NavLink>
       </nav>
       <div style={{ padding: '20px', marginTop: 'auto' }}>
         <button className="btn secondary small" onClick={logout}>

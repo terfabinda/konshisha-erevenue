@@ -1,4 +1,13 @@
 import { useEffect, useState } from 'react'
+import {
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+  CartesianGrid,
+} from 'recharts'
 import { supabase } from '../lib/supabase'
 import { RevenueStats, PrintStats } from '@erevenue/shared'
 
@@ -12,10 +21,17 @@ interface DashboardData {
   total_receipts?: number
 }
 
+interface TrendPoint {
+  day: string
+  revenue: number
+  count: number
+}
+
 export default function Dashboard() {
   const [data, setData] = useState<DashboardData | null>(null)
   const [stats, setStats] = useState<RevenueStats | null>(null)
   const [prints, setPrints] = useState<PrintStats | null>(null)
+  const [trend, setTrend] = useState<TrendPoint[]>([])
 
   useEffect(() => {
     supabase.rpc('get_dashboard_stats').then(({ data, error }) => {
@@ -26,6 +42,9 @@ export default function Dashboard() {
     })
     supabase.rpc('get_print_stats', { p_start: null, p_end: null }).then(({ data, error }) => {
       if (!error) setPrints(data)
+    })
+    supabase.rpc('get_revenue_trend', { p_days: 30 }).then(({ data, error }) => {
+      if (!error) setTrend((data as TrendPoint[]) ?? [])
     })
   }, [])
 
@@ -64,6 +83,38 @@ export default function Dashboard() {
           <div className="card"><div className="label">All-time Receipts</div><div className="value">{data.total_receipts}</div></div>
         </div>
       )}
+
+      <h3>Revenue Trend (30 days)</h3>
+      <div className="card" style={{ padding: '16px', height: 300 }}>
+        {trend.length > 0 ? (
+          <ResponsiveContainer width="100%" height="100%">
+            <AreaChart data={trend} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
+              <defs>
+                <linearGradient id="revGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#1B8C3D" stopOpacity={0.5} />
+                  <stop offset="95%" stopColor="#1B8C3D" stopOpacity={0} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+              <XAxis
+                dataKey="day"
+                tick={{ fontSize: 11 }}
+                tickFormatter={(d: string) => new Date(d).toLocaleDateString('en-NG', { day: 'numeric', month: 'short' })}
+              />
+              <YAxis tick={{ fontSize: 11 }} tickFormatter={(v: number) => '₦' + (v / 1000).toFixed(0) + 'k'} />
+              <Tooltip
+                formatter={(value: number) => ['₦' + value.toLocaleString('en-NG', { maximumFractionDigits: 2 }), 'Revenue']}
+                labelFormatter={(d: string) => new Date(d).toLocaleDateString('en-NG', { weekday: 'short', day: 'numeric', month: 'long' })}
+              />
+              <Area type="monotone" dataKey="revenue" stroke="#1B8C3D" fill="url(#revGrad)" strokeWidth={2} />
+            </AreaChart>
+          </ResponsiveContainer>
+        ) : (
+          <div style={{ textAlign: 'center', color: 'var(--muted)', paddingTop: 100 }}>
+            No revenue data in range yet
+          </div>
+        )}
+      </div>
 
       <h3>Recent Receipts</h3>
       <table>
