@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' hide User;
 import '../constants/app_strings.dart';
 import '../constants/firestore_paths.dart';
 import '../models/user_account.dart';
@@ -15,6 +16,55 @@ class AuthService {
   static const String _rememberedEmailKey = 'remembered_email';
   static const String _rememberedPasswordKey = 'remembered_password';
 
+  static Future<AuthResult?> _trySupabaseLogin(String email, String password) async {
+    try {
+      final res = await Supabase.instance.client.auth.signInWithPassword(email: email, password: password);
+      final user = res.user;
+      if (user == null) return null;
+      // Fetch profile from Supabase (RLS allows own read)
+      Map<String, dynamic>? prof;
+      try {
+        prof = await Supabase.instance.client.from('profiles').select().eq('id', user.id).single() as Map<String, dynamic>;
+      } catch (_) {
+        // No profile yet — create a minimal one from auth metadata
+        prof = {
+          'username': user.email,
+          'display_name': user.userMetadata?['display_name'] ?? user.email?.split('@').first ?? 'Agent',
+          'role': (user.appMetadata['role'] as String?) ?? 'agent',
+          'agency_id': user.userMetadata?['agency_id'] as String?,
+          'is_active': true,
+        };
+      }
+      final account = UserAccount.fromSupabase(user.id, prof);
+      if (!account.isActive) {
+        await Supabase.instance.client.auth.signOut();
+        return AuthResult.failure('Account has been deactivated.');
+      }
+      await EncryptedPrefs.instance.writeJson(_sessionKey, account.toJson());
+      await _recordServerSync();
+      await LoginAttemptService.recordAttempt(email, true);
+      unawaited(CloudLoginLogger.log(
+        email: email,
+        success: true,
+        userId: account.uid,
+        displayName: account.displayName,
+        agencyId: account.agencyId,
+      ));
+      unawaited(CloudLoginLogger.flushQueue());
+      return AuthResult.success(account);
+    } on AuthException catch (e) {
+      // Invalid credentials — let caller try Firebase
+      if (e.message.toLowerCase().contains('invalid login credentials') ||
+          e.message.toLowerCase().contains('invalid login') ||
+          e.statusCode == '400') {
+        return null;
+      }
+      return AuthResult.failure(e.message);
+    } catch (_) {
+      return null;
+    }
+  }
+
   static Future<AuthResult> login(String email, String password) async {
     try {
       final locked = await LoginAttemptService.isLockedOut(email);
@@ -24,6 +74,10 @@ class AuthService {
         unawaited(CloudLoginLogger.log(email: email, success: false, failureReason: msg));
         return AuthResult.failure(msg);
       }
+
+      // Try Supabase first (new agents created via admin web). Fall back to Firebase.
+      final supabaseResult = await _trySupabaseLogin(email, password);
+      if (supabaseResult != null) return supabaseResult;
 
       if (email == AppStrings.demoEmail && password == AppStrings.demoPassword) {
         final now = DateTime.now();
@@ -206,6 +260,9 @@ class AuthService {
   }
 
   static Future<void> logout() async {
+    try {
+      await Supabase.instance.client.auth.signOut();
+    } catch (_) {}
     await FirebaseAuth.instance.signOut();
     await EncryptedPrefs.instance.remove(_sessionKey);
   }
