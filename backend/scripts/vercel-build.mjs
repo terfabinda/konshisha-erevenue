@@ -86,6 +86,7 @@ fs.writeFileSync(
       routes: [
         { src: '/api/(.*)', dest: '/api' },
         { src: '/health', dest: '/api' },
+        { handle: 'filesystem' },
         { src: '/(.*)', dest: '/index.html' },
       ],
     },
