@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../data/models/receipt.dart';
 import '../../core/constants/firestore_paths.dart';
@@ -35,7 +36,9 @@ class ReceiptService {
     // leaving the receipt in the pending queue for AutoSyncService to retry.
     try {
       await syncPendingReceipts();
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('ReceiptService.addReceipt sync error: $e');
+    }
   }
 
   static Map<String, dynamic> _toSupabaseMap(Map<String, dynamic> data) {
@@ -513,7 +516,8 @@ class ReceiptService {
         // Lazy import to avoid cycle — SyncService is the source of truth for cloud sync
         final sync = await _tryNodeApiSync();
         if (sync != null) return sync;
-      } catch (_) {
+      } catch (e) {
+        debugPrint('ReceiptService._tryNodeApiSync error: $e');
         // fall through to direct sync
       }
 
@@ -531,11 +535,14 @@ class ReceiptService {
           data['id'] = receipt.id;
           await _supabase.from('receipts').upsert(data);
           didSync = true;
-        } catch (_) {
+        } catch (e) {
+          debugPrint('ReceiptService supabase upsert failed for ${receipt.id}: $e');
           try {
             await _collection.add(receipt.toJson());
             didSync = true;
-          } catch (_) {}
+          } catch (e2) {
+            debugPrint('ReceiptService Firestore add failed for ${receipt.id}: $e2');
+          }
         }
         if (didSync) {
           await _removeFromPending(receipt.id);
@@ -563,7 +570,8 @@ class ReceiptService {
       if (result.hadFailures && synced == 0) return null;
       // If we had pending but Node API synced 0 without failure, treat as no-op to allow fallback
       return null;
-    } catch (_) {
+    } catch (e) {
+      debugPrint('ReceiptService._tryNodeApiSync failed: $e');
       return null;
     }
   }

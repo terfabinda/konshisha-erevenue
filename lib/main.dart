@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'core/security/encrypted_prefs.dart';
 import 'core/services/auth_service.dart';
@@ -49,12 +50,26 @@ void main() async {
   SyncService.instance.tokenProvider = () async {
     try {
       final supaToken = Supabase.instance.client.auth.currentSession?.accessToken;
-      if (supaToken != null && supaToken.isNotEmpty) return supaToken;
-    } catch (_) {}
+      if (supaToken != null && supaToken.isNotEmpty) {
+        debugPrint('SyncService tokenProvider: using Supabase token');
+        return supaToken;
+      }
+      debugPrint('SyncService tokenProvider: no Supabase token');
+    } catch (e) {
+      debugPrint('SyncService tokenProvider Supabase error: $e');
+    }
     try {
       final fbUser = FirebaseAuth.instance.currentUser;
-      if (fbUser != null) return await fbUser.getIdToken();
-    } catch (_) {}
+      if (fbUser != null) {
+        final idToken = await fbUser.getIdToken();
+        debugPrint('SyncService tokenProvider: using Firebase token');
+        return idToken;
+      }
+      debugPrint('SyncService tokenProvider: no Firebase user');
+    } catch (e) {
+      debugPrint('SyncService tokenProvider Firebase error: $e');
+    }
+    debugPrint('SyncService tokenProvider: returning null');
     return null;
   };
   AutoSyncService.instance.start();

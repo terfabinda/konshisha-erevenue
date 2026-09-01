@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:flutter/foundation.dart' show debugPrint;
 
 import 'cloud_login_logger.dart';
 import 'sync_config.dart';
@@ -41,6 +42,7 @@ class AutoSyncService {
         Connectivity().onConnectivityChanged.listen((results) {
       lastConnectivity = results.isNotEmpty ? results.first : ConnectivityResult.none;
       final online = _isOnline(results.firstOrNullSafe);
+      debugPrint('AutoSyncService connectivity: $lastConnectivity, online=$online');
       if (online) _maybeSync(force: true);
     });
 
@@ -52,10 +54,13 @@ class AutoSyncService {
     try {
       final results = await Connectivity().checkConnectivity();
       lastConnectivity = results.isNotEmpty ? results.first : ConnectivityResult.none;
+      debugPrint('AutoSyncService _probe: $lastConnectivity');
       if (_isOnline(results.firstOrNullSafe)) {
         unawaited(_maybeSync(force: true));
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('AutoSyncService _probe error: $e');
+    }
   }
 
   bool _isOnline(ConnectivityResult? result) {
@@ -77,10 +82,11 @@ class AutoSyncService {
     _syncing = true;
     _runningController.add(true);
     try {
-      await SyncService.instance.syncNow();
+      final result = await SyncService.instance.syncNow();
+      debugPrint('AutoSyncService syncNow result: receiptsSynced=${result.receiptsSynced}, receiptsFailed=${result.receiptsFailed}, printsSynced=${result.printsSynced}, printsFailed=${result.printsFailed}');
       await CloudLoginLogger.flushQueue();
-    } catch (_) {
-      // Never let an internal error crash the background loop.
+    } catch (e) {
+      debugPrint('AutoSyncService _maybeSync error: $e');
     } finally {
       _syncing = false;
       _runningController.add(false);

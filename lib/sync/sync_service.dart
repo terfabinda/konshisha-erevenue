@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:http/http.dart' as http;
 
 import '../core/models/print_log.dart';
@@ -120,7 +121,9 @@ class SyncService {
         rSynced = done.length;
         rFailed = receipts.length - done.length;
         if (done.isNotEmpty) await _removeSyncReceipts(done);
-      } on SyncRetryException {
+        debugPrint('SyncService._pushReceipts: synced=$rSynced, failed=$rFailed');
+      } on SyncRetryException catch (e) {
+        debugPrint('SyncService._pushReceipts SyncRetryException: $e');
         rFailed = receipts.length;
       }
     }
@@ -131,7 +134,9 @@ class SyncService {
         pSynced = done.length;
         pFailed = prints.length - done.length;
         await _removePrints(done);
-      } on SyncRetryException {
+        debugPrint('SyncService._pushPrints: synced=$pSynced, failed=$pFailed');
+      } on SyncRetryException catch (e) {
+        debugPrint('SyncService._pushPrints SyncRetryException: $e');
         pFailed = prints.length;
       }
     }
@@ -195,12 +200,14 @@ class SyncService {
           if (m['synced_id'] != null) done.add(m['synced_id'] as String);
         }
       } else {
+        debugPrint('SyncService._pushReceipts batch failed: status=${res.statusCode}, body=${res.body}');
         throw SyncRetryException(
           'Receipt batch failed (${res.statusCode})',
           statusCode: res.statusCode,
         );
       }
     }
+    debugPrint('SyncService._pushReceipts done=${done.length}/${chunks.length}');
     return done;
   }
 
@@ -216,15 +223,17 @@ class SyncService {
         if (res.statusCode == 200 || res.statusCode == 201 || res.statusCode == 409) {
           done.add(log['id'] as String);
         } else {
-          // A single bad log (e.g. unknown receipt) shouldn't block the rest.
           if (res.statusCode == 400 || res.statusCode == 422) {
             done.add(log['id'] as String); // drop it — avoid infinite retry
+            debugPrint('SyncService._pushPrints dropped log ${log['id']}: status=${res.statusCode}');
           }
         }
-      } catch (_) {
+      } catch (e) {
+        debugPrint('SyncService._pushPrints error for log ${log['id']}: $e');
         // Continue with the next; failures are simply kept in the queue.
       }
     }
+    debugPrint('SyncService._pushPrints done=${done.length}/${logs.length}');
     return done;
   }
 
@@ -236,6 +245,7 @@ class SyncService {
     if (token != null && token.isNotEmpty) {
       headers['Authorization'] = 'Bearer $token';
     }
+    debugPrint('SyncService._post ${uri.toString()}');
     return http
         .post(uri, headers: headers, body: jsonEncode(body))
         .timeout(const Duration(seconds: 30));
@@ -256,7 +266,9 @@ class SyncService {
   Future<void> _safeWrite(String key, List<Map<String, dynamic>> data) async {
     try {
       await EncryptedPrefs.instance.writeJsonList(key, data);
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('SyncService._safeWrite failed for key $key: $e');
+    }
   }
 
   /// Removes successfully-synced receipts from ReceiptService's pending queue.
