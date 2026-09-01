@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify'
-import { getSupabase } from '../lib/supabase'
+import { getSupabase, getSupabaseForUser, getServiceSupabase } from '../lib/supabase'
 import { requireAuth } from '../lib/auth'
 
 export async function registerAgentRoutes(app: FastifyInstance) {
@@ -15,7 +15,7 @@ export async function registerAgentRoutes(app: FastifyInstance) {
   // List users (agents)
   app.get('/', async (request, reply) => {
     if (!(await requireAdmin(request, reply))) return
-    const sb = getSupabase()
+    const sb = getSupabaseForUser(request.supabaseToken!)
     const { data, error } = await sb
       .from('profiles')
       .select('*')
@@ -29,7 +29,7 @@ export async function registerAgentRoutes(app: FastifyInstance) {
   app.post('/', async (request, reply) => {
     if (!(await requireAdmin(request, reply))) return
     const b = request.body as Record<string, unknown>
-    const sb = getSupabase()
+    const sb = getServiceSupabase()
     const { data: userData, error: userError } = await sb.auth.admin.createUser({
       email: b.email as string,
       password: b.password as string,
@@ -39,7 +39,8 @@ export async function registerAgentRoutes(app: FastifyInstance) {
     })
     if (userError) return reply.code(400).send({ error: userError.message })
     if (userData.user) {
-      const { error } = await sb.from('profiles').insert({
+      const svc = getServiceSupabase()
+      const { error } = await svc.from('profiles').insert({
         id: userData.user.id,
         username: b.email,
         display_name: b.display_name,
@@ -60,7 +61,7 @@ export async function registerAgentRoutes(app: FastifyInstance) {
     if (!(await requireAdmin(request, reply))) return
     const { id } = request.params as { id: string }
     const body = request.body as Record<string, unknown>
-    const sb = getSupabase()
+    const sb = getSupabaseForUser(request.supabaseToken!)
     const { data, error } = await sb.from('profiles').update(body).eq('id', id).select().single()
     if (error) return reply.code(400).send({ error: error.message })
     return reply.send(data)
@@ -71,7 +72,7 @@ export async function registerAgentRoutes(app: FastifyInstance) {
     if (!(await requireAdmin(request, reply))) return
     const { id } = request.params as { id: string }
     const { is_active } = request.body as { is_active: boolean }
-    const sb = getSupabase()
+    const sb = getSupabaseForUser(request.supabaseToken!)
     const { data, error } = await sb.from('profiles').update({ is_active }).eq('id', id).select().single()
     if (error) return reply.code(400).send({ error: error.message })
     return reply.send(data)
@@ -81,7 +82,7 @@ export async function registerAgentRoutes(app: FastifyInstance) {
   app.patch('/:id/reset-device', async (request, reply) => {
     if (!(await requireAdmin(request, reply))) return
     const { id } = request.params as { id: string }
-    const sb = getSupabase()
+    const sb = getSupabaseForUser(request.supabaseToken!)
     const { data, error } = await sb
       .from('profiles')
       .update({ bound_device_fingerprint: null, device_fingerprint_fixed: false })
@@ -96,7 +97,7 @@ export async function registerAgentRoutes(app: FastifyInstance) {
   app.get('/:id/receipt-count', async (request, reply) => {
     if (!(await requireAdmin(request, reply))) return
     const { id } = request.params as { id: string }
-    const sb = getSupabase()
+    const sb = getSupabaseForUser(request.supabaseToken!)
     const { data, error } = await sb.rpc('get_agent_receipt_count', { p_user_id: id })
     if (error) return reply.code(400).send({ error: error.message })
     return reply.send({ count: data })

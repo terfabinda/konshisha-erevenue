@@ -9,6 +9,7 @@ declare module 'fastify' {
       role: string
       app_metadata: Record<string, unknown>
     }
+    supabaseToken?: string
   }
 }
 
@@ -37,5 +38,6 @@ export async function requireAuth(request: FastifyRequest, reply: FastifyReply):
     role: (appMeta.role as string) ?? 'agent',
     app_metadata: appMeta,
   }
+  request.supabaseToken = token
   return true
 }
