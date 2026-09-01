@@ -17,6 +17,7 @@
     "db:seed": "node scripts/seed.js"
   },
   "devDependencies": {
+    "esbuild": "^0.28.2",
     "pg": "^8.13.1"
   },
   "engines": {
