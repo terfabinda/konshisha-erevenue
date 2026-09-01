@@ -40,6 +40,9 @@ export default function Sidebar() {
         <NavLink to="/login-logs" className={({ isActive }) => (isActive ? active : '')}>
           Login Activity
         </NavLink>
+        <NavLink to="/reports" className={({ isActive }) => (isActive ? active : '')}>
+          Reports
+        </NavLink>
       </nav>
       <div style={{ padding: '20px', marginTop: 'auto' }}>
         <button className="btn secondary small" onClick={logout}>

@@ -11,6 +11,7 @@ import Notifications from './pages/Notifications'
 import Security from './pages/Security'
 import Bills from './pages/Bills'
 import LoginLogs from './pages/LoginLogs'
+import Reports from './pages/Reports'
 import Sidebar from './components/Sidebar'
 import Login from './pages/Login'
 
@@ -76,6 +77,7 @@ export default function App() {
           <Route path="/notifications" element={<Notifications />} />
           <Route path="/security" element={<Security />} />
           <Route path="/login-logs" element={<LoginLogs />} />
+          <Route path="/reports" element={<Reports />} />
           <Route path="*" element={<Dashboard />} />
         </Routes>
       </div>

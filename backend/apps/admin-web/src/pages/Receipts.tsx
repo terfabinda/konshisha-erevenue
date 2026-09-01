@@ -61,6 +61,41 @@ export default function Receipts() {
     setReceipts((prev) => prev.map((x) => (x.id === r.id ? { ...x, status: 'voided' as const } : x)))
   }
 
+  const printReceipt = (r: Receipt) => {
+    const w = window.open('', '_blank', 'width=380,height=600')
+    if (!w) return
+    const html = `
+      <html><head><title>Receipt ${r.receipt_ref ?? r.id}</title>
+      <style>
+        body { font-family: monospace; padding: 16px; max-width: 380px; margin: 0 auto; font-size: 13px; }
+        h2 { text-align: center; margin: 0 0 4px; font-size: 16px; }
+        .sub { text-align: center; color: #555; font-size: 11px; margin-bottom: 12px; }
+        .row { display: flex; justify-content: space-between; margin: 6px 0; border-bottom: 1px dashed #ccc; padding-bottom: 4px; }
+        .label { color: #555; }
+        .value { font-weight: 600; }
+        .total { font-size: 15px; font-weight: 800; border-top: 2px solid #000; margin-top: 8px; padding-top: 8px; }
+        .footer { text-align: center; margin-top: 16px; font-size: 10px; color: #777; }
+        @media print { body { padding: 0; } }
+      </style></head><body>
+        <h2>KONSHISHA IGR</h2>
+        <div class="sub">Official Government Collection Receipt<br/>${new Date(r.created_at).toLocaleString()}</div>
+        <div class="row"><span class="label">Ref</span><span class="value">${r.receipt_ref ?? r.id}</span></div>
+        <div class="row"><span class="label">Payer</span><span class="value">${r.payer_name}</span></div>
+        ${r.payer_phone ? `<div class="row"><span class="label">Phone</span><span class="value">${r.payer_phone}</span></div>` : ''}
+        ${r.payer_tin ? `<div class="row"><span class="label">TIN</span><span class="value">${r.payer_tin}</span></div>` : ''}
+        <div class="row"><span class="label">Category</span><span class="value">${r.description || r.category_id || '—'}</span></div>
+        <div class="row"><span class="label">Amount</span><span class="value">${fmt(r.amount)}</span></div>
+        ${Number(r.discount) ? `<div class="row"><span class="label">Discount</span><span class="value">-${fmt(r.discount)}</span></div>` : ''}
+        <div class="row total"><span>Total</span><span>${fmt(r.total_amount)}</span></div>
+        <div class="row"><span class="label">Status</span><span class="value">${r.status}</span></div>
+        <div class="row"><span class="label">Agent</span><span class="value">${r.created_by?.slice(0, 8) ?? '—'}</span></div>
+        <div class="footer">Thank you for your payment.<br/>Powered by Konshisha IGR</div>
+        <script>window.onload=()=>{window.print(); setTimeout(()=>window.close(), 500)}</script>
+      </body></html>`
+    w.document.write(html)
+    w.document.close()
+  }
+
   return (
     <div>
       <h2>Receipts</h2>
@@ -140,17 +175,20 @@ export default function Receipts() {
               <td><span className={`badge ${r.status}`}>{r.status}</span></td>
               <td>{new Date(r.created_at).toLocaleString()}</td>
               <td>
-                {r.status === 'active' ? (
-                  <button
-                    className="btn small danger"
-                    disabled={voidingId === r.id}
-                    onClick={() => onVoid(r)}
-                  >
-                    {voidingId === r.id ? 'Voiding…' : 'Void'}
-                  </button>
-                ) : (
-                  <span style={{ color: 'var(--muted)' }}>—</span>
-                )}
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  <button className="btn small secondary" onClick={() => printReceipt(r)}>Print</button>
+                  {r.status === 'active' ? (
+                    <button
+                      className="btn small danger"
+                      disabled={voidingId === r.id}
+                      onClick={() => onVoid(r)}
+                    >
+                      {voidingId === r.id ? 'Voiding…' : 'Void'}
+                    </button>
+                  ) : (
+                    <span style={{ color: 'var(--muted)', alignSelf: 'center' }}>—</span>
+                  )}
+                </div>
               </td>
             </tr>
           ))}
