@@ -84,8 +84,8 @@ fs.writeFileSync(
     {
       version: 3,
       routes: [
-        { src: '/api/(.*)', dest: '/api.func' },
-        { src: '/health', dest: '/api.func' },
+        { src: '/api/(.*)', dest: '/api' },
+        { src: '/health', dest: '/api' },
         { src: '/(.*)', dest: '/index.html' },
       ],
     },
