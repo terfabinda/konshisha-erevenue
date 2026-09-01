@@ -15,7 +15,7 @@ import { registerAgentRoutes } from './routes/agents'
 dotenv.config()
 
 export function buildApp() {
-  const app = Fastify({ logger: true })
+  const app = Fastify({ logger: true, ignoreTrailingSlash: true, ignoreDuplicateSlashes: true })
 
   app.register(cors, {
     origin: true,
