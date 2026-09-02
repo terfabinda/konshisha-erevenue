@@ -9,6 +9,7 @@ import '../data/models/receipt.dart';
 class ApiReceipt {
   final String id;
   final String agencyId;
+  final String createdBy;
   final String payerName;
   final String? payerPhone;
   final String? payerTin;
@@ -28,6 +29,7 @@ class ApiReceipt {
   ApiReceipt({
     required this.id,
     required this.agencyId,
+    required this.createdBy,
     required this.payerName,
     this.payerPhone,
     this.payerTin,
@@ -48,6 +50,7 @@ class ApiReceipt {
   factory ApiReceipt.fromLocal(Receipt r) => ApiReceipt(
         id: r.id,
         agencyId: r.agencyId,
+        createdBy: r.createdBy,
         payerName: r.payerName,
         payerPhone: r.payerPhone,
         payerTin: r.payerTIN,
@@ -69,6 +72,7 @@ class ApiReceipt {
   Map<String, dynamic> toUpsertJson() => {
         'id': id,
         'agency_id': agencyId,
+        'created_by': createdBy,
         'payer_name': payerName,
         'payer_phone': payerPhone,
         'payer_tin': payerTin,

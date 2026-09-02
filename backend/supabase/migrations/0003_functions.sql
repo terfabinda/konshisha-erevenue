@@ -88,12 +88,14 @@ declare
   r jsonb;
   v_row receipts;
   v_total numeric;
+  v_created_by text;
 begin
   for r in select * from jsonb_array_elements(p_rows) loop
     if not exists (select 1 from receipts where id = r->>'id') then
       v_total := coalesce((r->>'amount')::numeric, 0)
                + coalesce((r->>'penalty')::numeric, 0)
                - coalesce((r->>'discount')::numeric, 0);
+      v_created_by := coalesce(auth.uid()::text, r->>'created_by', r->>'createdBy', r->>'created_by_text', 'unknown');
 
 insert into receipts (
         id, agency_id, created_by, payer_name, payer_phone, payer_tin,
@@ -103,7 +105,7 @@ insert into receipts (
       values (
         r->>'id',
         case when (r->>'agency_id') ~ '^[0-9a-f-]{36}$' then (r->>'agency_id')::uuid else null end,
-        auth.uid(),
+        v_created_by,
         coalesce(r->>'payer_name', ''),
         r->>'payer_phone', r->>'payer_tin', r->>'payer_address',
         case when (r->>'category_id') ~ '^[0-9a-f-]{36}$' then (r->>'category_id')::uuid else null end,
