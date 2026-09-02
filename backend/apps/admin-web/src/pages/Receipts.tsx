@@ -107,9 +107,83 @@ export default function Receipts() {
     w.document.close()
   }
 
+  const printReport = () => {
+    const w = window.open('', '_blank')
+    if (!w) return
+    const period = from || to ? `${from || '…'} to ${to || '…'}${agency ? ' • ' + (agencies.find(a => a.id === agency)?.name ?? agency) : ''}${status ? ' • ' + status : ''}` : `All time${agency ? ' • ' + (agencies.find(a => a.id === agency)?.name ?? agency) : ''}${status ? ' • ' + status : ''}`
+    const generatedAt = new Date().toLocaleString()
+    const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    const rows = receipts.map((r, i) => `
+      <tr>
+        <td>${i + 1}</td>
+        <td>${esc(r.receipt_ref ?? r.id)}</td>
+        <td>${esc(r.payer_name)}</td>
+        <td>${esc(r.description || r.category_id || '—')}</td>
+        <td style="text-align:right">${fmt(r.amount)}</td>
+        <td style="text-align:right">${fmt(r.discount)}</td>
+        <td style="text-align:right">${fmt(r.total_amount)}</td>
+        <td>${esc(agentMap[r.created_by] ?? r.created_by?.slice(0, 8) ?? '—')}</td>
+        <td><span class="badge ${r.status}">${r.status}</span></td>
+        <td>${new Date(r.created_at).toLocaleString()}</td>
+      </tr>`).join('')
+    const voidedValue = receipts.filter(r => r.status === 'voided').reduce((s, r) => s + Number(r.total_amount ?? 0), 0)
+    const html = `
+      <html><head><title>Konshisha IGR — Revenue Receipts Report</title>
+      <style>
+        @page { size: landscape; margin: 12mm; }
+        * { box-sizing: border-box; }
+        body { font-family: 'Inter', Arial, sans-serif; margin: 0; padding: 16px; color: #111; font-size: 11px; }
+        .header { text-align: center; border-bottom: 3px solid #1B8C3D; padding-bottom: 10px; margin-bottom: 10px; }
+        .header h1 { margin: 0; font-size: 22px; color: #1B8C3D; letter-spacing: 1px; }
+        .header h2 { margin: 4px 0 0; font-size: 13px; font-weight: 600; color: #222; }
+        .header .sub { font-size: 11px; color: #555; margin-top: 2px; }
+        .meta { display: flex; justify-content: space-between; font-size: 10px; color: #555; margin-bottom: 10px; }
+        .stats { display: grid; grid-template-columns: repeat(4,1fr); gap: 8px; margin-bottom: 12px; }
+        .stat { border: 1px solid #ddd; border-radius: 6px; padding: 8px 10px; text-align: center; }
+        .stat .label { font-size: 9px; text-transform: uppercase; letter-spacing: .5px; color: #666; }
+        .stat .value { font-size: 14px; font-weight: 700; color: #1B8C3D; margin-top: 2px; }
+        .stat .sub { font-size: 9px; color: #777; }
+        table { width: 100%; border-collapse: collapse; font-size: 10px; }
+        th { background: #1B8C3D; color: #fff; padding: 6px 4px; text-align: left; font-weight: 600; }
+        td { padding: 5px 4px; border-bottom: 1px solid #e5e5e5; }
+        tr:nth-child(even) td { background: #f8fdf9; }
+        .badge { padding: 1px 6px; border-radius: 10px; font-size: 9px; text-transform: capitalize; }
+        .badge.active { background: #e6f4ea; color: #167A34; border: 1px solid #b7dfc2; }
+        .badge.voided { background: #fdecea; color: #9a1a1a; border: 1px solid #f5b5b5; }
+        .footer { margin-top: 12px; text-align: center; font-size: 9px; color: #777; border-top: 1px solid #ddd; padding-top: 6px; }
+        @media print { body { padding: 0; } .no-print { display: none; } }
+      </style></head><body>
+        <div class="header">
+          <h1>KONSHISHA IGR</h1>
+          <h2>Reports of Revenue Receipts</h2>
+          <div class="sub">Dated period from <strong>${from || 'start'}</strong> to <strong>${to || 'now'}</strong> — ${esc(period)}</div>
+        </div>
+        <div class="meta"><span>Generated: ${generatedAt}</span><span>${receipts.length} record(s)${receipts.length===200?' (showing latest 200)':''}</span></div>
+        <div class="stats">
+          <div class="stat"><div class="label">Receipts (filtered)</div><div class="value">${stats.total}</div><div class="sub">${stats.active} active • ${stats.voided} voided</div></div>
+          <div class="stat"><div class="label">Total Revenue</div><div class="value">${fmt(stats.revenue)}</div><div class="sub">Avg ${fmt(stats.avg)}</div></div>
+          <div class="stat"><div class="label">Active</div><div class="value">${stats.active}</div><div class="sub">${stats.voided} voided</div></div>
+          <div class="stat"><div class="label">Voided Value</div><div class="value">${fmt(voidedValue)}</div><div class="sub">of filtered</div></div>
+        </div>
+        <table>
+          <thead><tr><th>#</th><th>Ref</th><th>Payer</th><th>Category</th><th>Amount</th><th>Discount</th><th>Total</th><th>Agent</th><th>Status</th><th>Date</th></tr></thead>
+          <tbody>${rows || '<tr><td colspan=10 style="text-align:center; color:#777">No receipts for selected period</td></tr>'}</tbody>
+        </table>
+        <div class="footer">Konshisha IGR — Official Government Collection Report • Printed ${generatedAt} • ${from || '—'} to ${to || '—'}</div>
+        <script>window.onload=()=>{window.print();}</script>
+      </body></html>`
+    w.document.write(html)
+    w.document.close()
+  }
+
   return (
     <div>
-      <h2>Receipts</h2>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        <h2 style={{ margin: 0 }}>Receipts</h2>
+        <button className="btn" onClick={printReport} disabled={!receipts.length} title={receipts.length ? 'Print filtered report in landscape' : 'No receipts to print'}>
+          Print Report
+        </button>
+      </div>
       <div className="filter-bar">
         <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
         <input type="date" value={to} onChange={(e) => setTo(e.target.value)} />
@@ -131,6 +205,9 @@ export default function Receipts() {
             Reset
           </button>
         ) : null}
+        <button className="btn secondary" onClick={printReport} disabled={!receipts.length} style={{ marginLeft: 'auto' }}>
+          Print Report (Landscape)
+        </button>
       </div>
 
       {error && <div className="error">{error}</div>}
