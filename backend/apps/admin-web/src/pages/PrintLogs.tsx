@@ -4,6 +4,7 @@ import { PrintLog } from '@erevenue/shared'
 
 export default function PrintLogs() {
   const [logs, setLogs] = useState<PrintLog[]>([])
+  const [agentMap, setAgentMap] = useState<Record<string, string>>({})
 
   useEffect(() => {
     supabase
@@ -13,6 +14,16 @@ export default function PrintLogs() {
       .limit(200)
       .then(({ data, error }) => {
         if (!error) setLogs(data ?? [])
+      })
+    supabase
+      .from('profiles')
+      .select('id, display_name, username')
+      .then(({ data }) => {
+        if (data) {
+          const m: Record<string, string> = {}
+          for (const p of data as any[]) m[p.id] = p.display_name || p.username || p.id.slice(0, 8)
+          setAgentMap(m)
+        }
       })
   }, [])
 
@@ -45,7 +56,7 @@ export default function PrintLogs() {
                 </span>
               </td>
               <td>{l.is_reprint ? 'Yes' : 'No'}</td>
-              <td>{l.printed_by?.slice(0, 8)}</td>
+              <td>{agentMap[l.printed_by] ?? l.printed_by?.slice(0, 8) ?? '—'}</td>
               <td>{new Date(l.printed_at).toLocaleString()}</td>
             </tr>
           ))}

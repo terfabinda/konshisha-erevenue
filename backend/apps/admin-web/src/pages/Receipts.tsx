@@ -9,6 +9,7 @@ export default function Receipts() {
   const [status, setStatus] = useState('')
   const [agency, setAgency] = useState('')
   const [agencies, setAgencies] = useState<Agency[]>([])
+  const [agentMap, setAgentMap] = useState<Record<string, string>>({})
   const [voidingId, setVoidingId] = useState('')
   const [error, setError] = useState('')
 
@@ -19,6 +20,16 @@ export default function Receipts() {
       .order('name')
       .then(({ data, error }) => {
         if (!error) setAgencies((data as Agency[]) ?? [])
+      })
+    supabase
+      .from('profiles')
+      .select('id, display_name, username')
+      .then(({ data, error }) => {
+        if (!error && data) {
+          const m: Record<string, string> = {}
+          for (const p of data as any[]) m[p.id] = p.display_name || p.username || p.id.slice(0, 8)
+          setAgentMap(m)
+        }
       })
   }, [])
 
@@ -88,7 +99,7 @@ export default function Receipts() {
         ${Number(r.discount) ? `<div class="row"><span class="label">Discount</span><span class="value">-${fmt(r.discount)}</span></div>` : ''}
         <div class="row total"><span>Total</span><span>${fmt(r.total_amount)}</span></div>
         <div class="row"><span class="label">Status</span><span class="value">${r.status}</span></div>
-        <div class="row"><span class="label">Agent</span><span class="value">${r.created_by?.slice(0, 8) ?? '—'}</span></div>
+        <div class="row"><span class="label">Agent</span><span class="value">${agentMap[r.created_by] ?? r.created_by?.slice(0, 8) ?? '—'}</span></div>
         <div class="footer">Thank you for your payment.<br/>Powered by Konshisha IGR</div>
         <script>window.onload=()=>{window.print(); setTimeout(()=>window.close(), 500)}</script>
       </body></html>`
@@ -171,7 +182,7 @@ export default function Receipts() {
               <td>{fmt(r.amount)}</td>
               <td>{fmt(r.discount)}</td>
               <td>{fmt(r.total_amount)}</td>
-              <td>{r.created_by?.slice(0, 8)}</td>
+              <td>{agentMap[r.created_by] ?? r.created_by?.slice(0, 8) ?? '—'}</td>
               <td><span className={`badge ${r.status}`}>{r.status}</span></td>
               <td>{new Date(r.created_at).toLocaleString()}</td>
               <td>
