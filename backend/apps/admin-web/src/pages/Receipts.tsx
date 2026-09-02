@@ -110,7 +110,14 @@ export default function Receipts() {
   const printReport = () => {
     const w = window.open('', '_blank')
     if (!w) return
-    const period = from || to ? `${from || '…'} to ${to || '…'}${agency ? ' • ' + (agencies.find(a => a.id === agency)?.name ?? agency) : ''}${status ? ' • ' + status : ''}` : `All time${agency ? ' • ' + (agencies.find(a => a.id === agency)?.name ?? agency) : ''}${status ? ' • ' + status : ''}`
+    const fmtLong = (iso: string) => {
+      if (!iso) return '—'
+      const d = new Date(iso + 'T00:00:00')
+      return isNaN(d.getTime()) ? iso : d.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })
+    }
+    const periodDates = from || to ? `${from ? fmtLong(from) : '…'} to ${to ? fmtLong(to) : '…'}` : 'All time'
+    const periodExtra = `${agency ? ' • ' + (agencies.find(a => a.id === agency)?.name ?? agency) : ''}${status ? ' • ' + status : ''}`
+    const period = `Period: ${periodDates}${periodExtra}`
     const generatedAt = new Date().toLocaleString()
     const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     const rows = receipts.map((r, i) => `
@@ -156,7 +163,7 @@ export default function Receipts() {
         <div class="header">
           <h1>KONSHISHA IGR</h1>
           <h2>Reports of Revenue Receipts</h2>
-          <div class="sub">Dated period from <strong>${from || 'start'}</strong> to <strong>${to || 'now'}</strong> — ${esc(period)}</div>
+          <div class="sub"><strong>${esc(period)}</strong></div>
         </div>
         <div class="meta"><span>Generated: ${generatedAt}</span><span>${receipts.length} record(s)${receipts.length===200?' (showing latest 200)':''}</span></div>
         <div class="stats">
@@ -169,7 +176,7 @@ export default function Receipts() {
           <thead><tr><th>#</th><th>Ref</th><th>Payer</th><th>Category</th><th>Amount</th><th>Discount</th><th>Total</th><th>Agent</th><th>Status</th><th>Date</th></tr></thead>
           <tbody>${rows || '<tr><td colspan=10 style="text-align:center; color:#777">No receipts for selected period</td></tr>'}</tbody>
         </table>
-        <div class="footer">Konshisha IGR — Official Government Collection Report • Printed ${generatedAt} • ${from || '—'} to ${to || '—'}</div>
+        <div class="footer">Konshisha IGR — Official Government Collection Report • Printed ${generatedAt} • ${from ? fmtLong(from) : '—'} to ${to ? fmtLong(to) : '—'}</div>
         <script>window.onload=()=>{window.print();}</script>
       </body></html>`
     w.document.write(html)
